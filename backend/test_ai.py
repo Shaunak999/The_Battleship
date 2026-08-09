@@ -403,7 +403,7 @@ def test_base_ai_is_abstract():
     """Verify BaseAI cannot be instantiated directly."""
     print("  Testing BaseAI is abstract...")
     try:
-        BaseAI()
+        BaseAI()  # type: ignore[abstract]
         assert False, "Should not be able to instantiate BaseAI"
     except TypeError:
         pass
