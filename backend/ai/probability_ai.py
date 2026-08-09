@@ -63,13 +63,8 @@ class ProbabilityAI(BaseAI):
     # ------------------------------------------------------------------
 
     def choose_move(self) -> tuple[int, int]:
-        """Build the probability heat-map and return the highest-value cell.
+        """Build the probability heat-map and return the highest-value cell."""
 
-        Returns
-        -------
-        tuple[int, int]
-            (row, col) of the best cell to attack.
-        """
         heat = self._build_heatmap()
 
         # Zero out cells we've already shot at
@@ -78,15 +73,22 @@ class ProbabilityAI(BaseAI):
 
         # Find the cell with the maximum probability
         max_val = heat.max()
+
         if max_val == 0:
             # Shouldn't happen in a normal game — fallback
             available = self._available_cells()
+
             if not available:
                 raise RuntimeError("ProbabilityAI: no cells left")
+
             return random.choice(available)
 
-        # All cells tied at the max — pick one at random for variety
-        candidates = list(zip(*np.where(heat == max_val)))
+        # Convert NumPy int64 values to normal Python ints
+        candidates = [
+            (int(row), int(col))
+            for row, col in zip(*np.where(heat == max_val))
+        ]
+
         return random.choice(candidates)
 
     # ------------------------------------------------------------------
