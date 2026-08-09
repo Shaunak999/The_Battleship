@@ -26,18 +26,28 @@ from .random_ai import RandomAI
 from .hunt_target_ai import HuntTargetAI
 from .probability_ai import ProbabilityAI
 
-# Registry of available AI strategies
 AI_STRATEGIES = {
     "random": RandomAI,
     "hunt_target": HuntTargetAI,
     "probability": ProbabilityAI,
 }
 
-# Human-readable names for the UI
 AI_STRATEGY_NAMES = {
     "random": "Random",
     "hunt_target": "Hunt & Target",
     "probability": "Probability",
+}
+
+_DESCRIPTIONS = {
+    "random": "Fires at a random un-attacked cell each turn. Baseline strategy.",
+    "hunt_target": (
+        "Uses a checkerboard pattern to hunt for ships, then switches to "
+        "directional targeting to sink discovered ships."
+    ),
+    "probability": (
+        "Calculates a probability heat-map of valid ship placements for "
+        "every cell and fires at the most likely location."
+    ),
 }
 
 
@@ -47,59 +57,34 @@ def get_ai(strategy: str, board_size: int = BOARD_SIZE) -> BaseAI:
     Parameters
     ----------
     strategy : str
-        One of ``"random"``, ``"hunt_target"``, or ``"probability"``.
+        One of "random", "hunt_target", "probability", or a human-friendly
+        variant such as "Hunt & Target".
     board_size : int
         Board size (default 10).
-
-    Returns
-    -------
-    BaseAI
-        An instance of the requested strategy, reset and ready to play.
 
     Raises
     ------
     ValueError
         If *strategy* is not a recognised strategy name.
     """
-    key = strategy.lower().replace(" ", "_").replace("&", "").replace("-", "_")
-    # Normalise common variations
-    key = key.replace("hunt__target", "hunt_target")
+    key = strategy.strip().lower().replace(" ", "_").replace("&", "").replace("-", "_")
+    key = key.replace("__", "_")
     key = key.replace("hunttarget", "hunt_target")
 
     if key not in AI_STRATEGIES:
         valid = ", ".join(AI_STRATEGIES.keys())
-        raise ValueError(
-            f"Unknown AI strategy '{strategy}'. Valid strategies: {valid}"
-        )
+        raise ValueError(f"Unknown AI strategy '{strategy}'. Valid strategies: {valid}")
 
-    ai = AI_STRATEGIES[key](board_size=board_size)
-    return ai
+    return AI_STRATEGIES[key](board_size=board_size)
 
 
 def list_strategies() -> list[dict]:
-    """Return a list of available strategies with metadata.
-
-    Returns
-    -------
-    list[dict]
-        Each dict has ``"key"``, ``"name"``, and ``"description"`` fields.
-    """
-    descriptions = {
-        "random": "Fires at a random un-attacked cell each turn. Baseline strategy.",
-        "hunt_target": (
-            "Uses a checkerboard pattern to hunt for ships, then switches to "
-            "directional targeting to sink discovered ships."
-        ),
-        "probability": (
-            "Calculates a probability heat-map of valid ship placements for "
-            "every cell and fires at the most likely location."
-        ),
-    }
+    """Return available strategies with metadata, for the UI to render."""
     return [
         {
             "key": key,
             "name": AI_STRATEGY_NAMES[key],
-            "description": descriptions.get(key, ""),
+            "description": _DESCRIPTIONS.get(key, ""),
         }
         for key in AI_STRATEGIES
     ]
