@@ -9,7 +9,7 @@ export default function Home({ onSelectMode }) {
           Human vs Human
         </button>
         <button className="btn" onClick={() => onSelectMode("human_vs_ai")}>
-          Human vs AI
+          Human vs Computer
         </button>
       </div>
     </div>

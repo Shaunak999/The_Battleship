@@ -37,7 +37,7 @@ export default function StrategySelector({ onSelect }) {
 
   return (
     <div>
-      <h3>Choose AI strategy</h3>
+      <h3>Choose Computer Strategy</h3>
       <div className="strategy-options">
         {strategies.map((s) => (
           <button
