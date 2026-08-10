@@ -1,29 +1,17 @@
 /**
- * isMyTurn: whether the viewer currently attacking is the human at this screen.
- * aiThinking: true while waiting on POST /ai-move.
- * lastMessage: Board.attack()'s "message" field from the most recent result, if any.
+ * headline: the exact text to show (computed by the caller, since what
+ * counts as "your turn" differs between Human vs AI — a single fixed
+ * human — and Human vs Human, where the banner must name whichever
+ * player is actually up).
  */
-export default function GameStatus({ isMyTurn, aiThinking, lastMessage }) {
+export default function GameStatus({ headline, isMyTurn, lastMessage }) {
   const turnClass = isMyTurn ? "turn-user" : "turn-enemy";
-
-  let headline;
-  if (aiThinking) {
-    headline = "AI is thinking...";
-  } else if (isMyTurn) {
-    headline = "Your turn — pick a cell on the enemy board";
-  } else {
-    headline = "Waiting for opponent...";
-  }
 
   return (
     <div className={`status-banner ${turnClass}`}>
       <div>
         <div>{headline}</div>
-        {lastMessage && (
-          <div style={{ fontWeight: 400, fontSize: "0.9rem", marginTop: 4 }}>
-            {lastMessage}
-          </div>
-        )}
+        
       </div>
     </div>
   );

@@ -4,6 +4,7 @@ import ShipStatus from "../components/ShipStatus";
 import GameStatus from "../components/GameStatus";
 import StrategySelector from "../components/StrategySelector";
 import ShipPlacement from "../components/ShipPlacement";
+import GameResults from "../components/GameResults";
 import { createGame, placeShip, attack, aiMove, getGame } from "../services/api";
 
 /**
@@ -11,11 +12,16 @@ import { createGame, placeShip, attack, aiMove, getGame } from "../services/api"
  * viewer_index via getGame(), rather than trusting the "state" object
  * embedded in place/attack/ai-move responses. Those responses default
  * their viewer to whoever's turn it currently is post-action, which is
- * NOT necessarily the screen we want to render (e.g. right after a human
- * attacks in Human vs AI mode, the embedded default would briefly be the
- * AI's own perspective — which would incorrectly hide the human's own
- * ships if shown on the human's screen). One extra request per action
- * buys correctness on which ships are visible to whom.
+ * NOT necessarily the screen we want to render. One extra request per
+ * action buys correctness on which ships are visible to whom.
+ *
+ * Board layout: Player 1 (index 0) is always rendered LEFT, Player 2 /
+ * AI (index 1) is always rendered RIGHT — fixed by player identity, not
+ * by whose turn it is. Only which board is CLICKABLE changes with turn.
+ * Privacy is still enforced structurally: a given screen only ever shows
+ * ship positions belonging to whichever player's device is currently up
+ * (gameState.your_player), because the backend hides the other player's
+ * unhit ships regardless of layout position.
  */
 
 const PHASES = {
@@ -23,8 +29,18 @@ const PHASES = {
   PLACEMENT: "placement",
   PASS_DEVICE: "pass_device",
   BATTLE: "battle",
-  GAME_OVER: "game_over",
+  REVEAL: "reveal", // game over — show both fleets fully revealed
+  RESULTS: "results", // stats comparison, reached via a button from REVEAL
 };
+
+/** Presentational-only mask: hides ship cells ("S" -> "~"). Used during
+ * Human vs Human battle so NEITHER player's ship positions are visible
+ * on screen — not even your own — until the game ends and REVEAL shows
+ * everything. Never touches real game state; the backend still knows
+ * exactly where every ship is regardless. */
+function maskShips(board) {
+  return board.map((row) => row.map((symbol) => (symbol === "S" ? "~" : symbol)));
+}
 
 export default function Game({ mode, onExit }) {
   const [phase, setPhase] = useState(
@@ -37,6 +53,8 @@ export default function Game({ mode, onExit }) {
   const [lastMessage, setLastMessage] = useState(null);
   const [error, setError] = useState(null);
   const [pendingViewerAfterPass, setPendingViewerAfterPass] = useState(0);
+  const [finalState, setFinalState] = useState(null); // for stats page (viewer=0 snapshot)
+  const [revealData, setRevealData] = useState(null); // both fleets fully shown
 
   // Human vs Human only: create the game immediately, no strategy step.
   useEffect(() => {
@@ -56,10 +74,7 @@ export default function Game({ mode, onExit }) {
   async function startGame(aiStrategy) {
     setError(null);
     try {
-      const { game_id } = await createGame({
-        mode,
-        aiStrategy,
-      });
+      const { game_id } = await createGame({ mode, aiStrategy });
       setGameId(game_id);
       const state = await getGame(game_id, 0);
       setGameState(state);
@@ -84,8 +99,6 @@ export default function Game({ mode, onExit }) {
     }
 
     // Human vs Human: whoever just finished placing hands off to the other player.
-    // If that's player 1 finishing, players_ready flips true and the pass-device
-    // screen leads into battle instead of back into placement.
     setPendingViewerAfterPass(1 - viewerIndex);
     setPhase(PHASES.PASS_DEVICE);
   }
@@ -95,27 +108,53 @@ export default function Game({ mode, onExit }) {
     setPhase(state.players_ready ? PHASES.BATTLE : PHASES.PLACEMENT);
   }
 
+  /**
+   * Fetches BOTH players' own perspectives and keeps just the fully-
+   * revealed "your_player" board from each — the one view the backend
+   * never hides ships on, regardless of hide_ships elsewhere. This is
+   * the only way to show a winner's surviving, never-hit ships too.
+   */
+  async function loadReveal() {
+    const [asPlayer0, asPlayer1] = await Promise.all([
+      getGame(gameId, 0),
+      getGame(gameId, 1),
+    ]);
+    setRevealData({
+      left: asPlayer0.your_player, // player index 0, fully revealed
+      right: asPlayer1.your_player, // player index 1, fully revealed
+      winner: asPlayer0.winner,
+    });
+    setFinalState(asPlayer0); // stats page reuses this (hit/miss counts are never masked)
+    setPhase(PHASES.REVEAL);
+  }
+
   async function handleAttack(row, col) {
     if (aiThinking) return;
     setError(null);
+
+    // The acting player is whoever's turn it currently is, derived from
+    // gameState — not viewerIndex, which now stays fixed at 0 through the
+    // whole battle phase (see the note above this component).
+    const isPlayer0Turn = gameState.current_player === gameState.your_player.name;
+    const actingPlayerIndex = isPlayer0Turn ? 0 : 1;
+
     try {
-      const { result } = await attack(gameId, { playerIndex: viewerIndex, row, col });
+      const { result } = await attack(gameId, { playerIndex: actingPlayerIndex, row, col });
       setLastMessage(result.message);
 
       if (result.game_over) {
-        await refreshView(viewerIndex);
-        setPhase(PHASES.GAME_OVER);
+        await loadReveal();
         return;
       }
 
+      await refreshView(0);
+
       if (mode === "human_vs_ai") {
-        await refreshView(0);
         await triggerAiMove();
-      } else {
-        // Human vs Human: always pass the device after a shot.
-        setPendingViewerAfterPass(1 - viewerIndex);
-        setPhase(PHASES.PASS_DEVICE);
       }
+      // Human vs Human: no pass-device here — the board that just became
+      // the non-acting side simply greys out (see `inactive` below), and
+      // the other board lights up for the next player's turn in place.
     } catch (err) {
       setError(err.message);
     }
@@ -124,13 +163,13 @@ export default function Game({ mode, onExit }) {
   async function triggerAiMove() {
     setAiThinking(true);
     try {
-      // Small delay so "AI is thinking..." is visible rather than instant.
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500)); // let "AI is thinking..." be visible
       const { result } = await aiMove(gameId);
       setLastMessage(`AI attacked. ${result.message}`);
-      await refreshView(0);
       if (result.game_over) {
-        setPhase(PHASES.GAME_OVER);
+        await loadReveal();
+      } else {
+        await refreshView(0);
       }
     } catch (err) {
       setError(err.message);
@@ -144,6 +183,42 @@ export default function Game({ mode, onExit }) {
       <div className="card">
         <StrategySelector onSelect={(key) => startGame(key)} />
         {error && <div className="error-text">{error}</div>}
+      </div>
+    );
+  }
+
+  if (phase === PHASES.RESULTS) {
+    if (!finalState) return <p>Loading results...</p>;
+    return <GameResults state={finalState} onExit={onExit} />;
+  }
+
+  if (phase === PHASES.REVEAL) {
+    if (!revealData) return <p>Loading final boards...</p>;
+    return (
+      <div className="app-shell">
+        <div className="card" style={{ textAlign: "center" }}>
+          <h2>{revealData.winner ? `${revealData.winner} wins!` : "Game over"}</h2>
+          
+        </div>
+
+        <div className="boards-row">
+          <div>
+            <Board title={revealData.left.name} board={revealData.left.board} variant="user" sunkShips={revealData.left.sunk_ships} />
+            <div style={{ marginTop: 12 }}>
+              <ShipStatus title={`${revealData.left.name}'s Fleet`} remainingShips={revealData.left.remaining_ships} />
+            </div>
+          </div>
+          <div>
+            <Board title={revealData.right.name} board={revealData.right.board} variant="enemy" sunkShips={revealData.right.sunk_ships} />
+            <div style={{ marginTop: 12 }}>
+              <ShipStatus title={`${revealData.right.name}'s Fleet`} remainingShips={revealData.right.remaining_ships} />
+            </div>
+          </div>
+        </div>
+
+        <button className="btn" onClick={() => setPhase(PHASES.RESULTS)}>
+          Continue
+        </button>
       </div>
     );
   }
@@ -182,51 +257,81 @@ export default function Game({ mode, onExit }) {
     );
   }
 
+  // --- BATTLE ---
+  // viewerIndex stays fixed at 0 through the whole battle phase now (it
+  // only still toggles during PLACEMENT's pass-device handoff), so
+  // your_player is always Player 1 (left) and opponent_player is always
+  // Player 2 / AI (right). Whose turn it is comes from current_player.
   const isMyTurn = gameState.current_player === gameState.your_player.name;
+  const leftData = gameState.your_player;
+  const rightData = gameState.opponent_player;
+
+  const canAttack = phase === PHASES.BATTLE && !aiThinking;
+  // Human vs Human: exactly one side is clickable, following whoever's turn it is.
+  // Human vs AI: only the right (AI) board is ever clickable, only on the human's turn.
+  const leftClickable = mode === "human_vs_human" && canAttack && !isMyTurn;
+  const rightClickable = canAttack && isMyTurn;
+
+  const statusHeadline = aiThinking
+    ? "AI is thinking..."
+    : mode === "human_vs_human"
+      ? `${gameState.current_player}'s turn — attack the other board`
+      : isMyTurn
+        ? "Your turn — pick a cell on the enemy board"
+        : "Waiting for opponent...";
+
+  // Grey out whichever side isn't currently actionable. In Human vs AI,
+  // the human's own board never toggles clickable at all, so it's never
+  // shown as "inactive" either — that would just be a permanent, useless grey.
+  const leftInactive = mode === "human_vs_human" && phase === PHASES.BATTLE && !leftClickable;
+  const rightInactive = phase === PHASES.BATTLE && !rightClickable;
+
+  // Human vs Human: hide EVERY ship cell on both boards during battle —
+  // including the viewer's own — regardless of which side "your_player"
+  // currently maps to. The opponent side is already hidden by the
+  // backend's hide_ships flag; masking both defensively means this
+  // guarantee doesn't depend on that flag being right in every case.
+  const displayLeftBoard = mode === "human_vs_human" ? maskShips(leftData.board) : leftData.board;
+  const displayRightBoard =
+    mode === "human_vs_human" ? maskShips(rightData.board) : rightData.board;
 
   return (
     <div className="app-shell">
-      <GameStatus
-        isMyTurn={isMyTurn && !aiThinking}
-        aiThinking={aiThinking}
-        lastMessage={lastMessage}
-      />
+      <GameStatus headline={statusHeadline} isMyTurn={isMyTurn && !aiThinking} lastMessage={lastMessage} />
 
       {error && <div className="error-text">{error}</div>}
 
       <div className="boards-row">
         <div>
-          <Board title="Your Board" board={gameState.your_player.board} variant="user" />
+          <Board
+            title={leftData.name}
+            board={displayLeftBoard}
+            variant="user"
+            clickable={leftClickable}
+            inactive={leftInactive}
+            onCellClick={handleAttack}
+            sunkShips={leftData.sunk_ships}
+          />
           <div style={{ marginTop: 12 }}>
-            <ShipStatus title="Your Fleet" remainingShips={gameState.your_player.remaining_ships} />
+            <ShipStatus title={`${leftData.name}'s Fleet`} remainingShips={leftData.remaining_ships} />
           </div>
         </div>
 
         <div>
           <Board
-            title="Enemy Board"
-            board={gameState.opponent_player.board}
+            title={rightData.name}
+            board={displayRightBoard}
             variant="enemy"
-            clickable={phase === PHASES.BATTLE && isMyTurn && !aiThinking}
+            clickable={rightClickable}
+            inactive={rightInactive}
             onCellClick={handleAttack}
+            sunkShips={rightData.sunk_ships}
           />
           <div style={{ marginTop: 12 }}>
-            <ShipStatus
-              title="Enemy Fleet"
-              remainingShips={gameState.opponent_player.remaining_ships}
-            />
+            <ShipStatus title={`${rightData.name}'s Fleet`} remainingShips={rightData.remaining_ships} />
           </div>
         </div>
       </div>
-
-      {phase === PHASES.GAME_OVER && (
-        <div className="card" style={{ textAlign: "center" }}>
-          <h2>{gameState.winner ? `${gameState.winner} wins!` : "Game over"}</h2>
-          <button className="btn" onClick={onExit}>
-            Back to Home
-          </button>
-        </div>
-      )}
     </div>
   );
 }

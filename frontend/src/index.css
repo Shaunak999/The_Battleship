@@ -215,6 +215,132 @@ button:focus-visible,
   cursor: not-allowed;
 }
 
+.cell.preview-valid {
+  background: var(--color-user-light);
+  border-color: var(--color-user);
+  border-style: dashed;
+}
+
+.cell.preview-invalid {
+  background: var(--color-enemy-light);
+  border-color: var(--color-enemy);
+  border-style: dashed;
+}
+
+.ship-tray {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: var(--color-water);
+  border-radius: 8px;
+}
+
+.ship-tray-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--color-ship);
+  color: white;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: grab;
+  user-select: none;
+}
+
+.ship-tray-chip:active {
+  cursor: grabbing;
+}
+
+.rotate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 16px;
+}
+
+.results-table th,
+.results-table td {
+  padding: 8px 12px;
+  text-align: center;
+  border-bottom: 1px solid var(--color-water-border);
+}
+
+.results-table .results-label {
+  text-align: left;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.reveal-toggle {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.board-wrapper.inactive {
+  opacity: 0.5;
+  filter: grayscale(70%);
+  pointer-events: none;
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+.board-title .inactive-label {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.cell.hit.sunk {
+  background: var(--color-hit);
+  border-color: var(--color-hit);
+}
+
+.cell.sunk-horizontal.sunk-start {
+  border-radius: 4px 0 0 4px;
+  border-right-color: transparent;
+}
+
+.cell.sunk-horizontal.sunk-mid {
+  border-radius: 0;
+  border-left-color: transparent;
+  border-right-color: transparent;
+}
+
+.cell.sunk-horizontal.sunk-end {
+  border-radius: 0 4px 4px 0;
+  border-left-color: transparent;
+}
+
+.cell.sunk-vertical.sunk-start {
+  border-radius: 4px 4px 0 0;
+  border-bottom-color: transparent;
+}
+
+.cell.sunk-vertical.sunk-mid {
+  border-radius: 0;
+  border-top-color: transparent;
+  border-bottom-color: transparent;
+}
+
+.cell.sunk-vertical.sunk-end {
+  border-radius: 0 0 4px 4px;
+  border-top-color: transparent;
+}
+
+.cell.sunk-single {
+  border-radius: 4px;
+}
+
 /* --------------------------------------------------
    Status pieces
    -------------------------------------------------- */
@@ -330,4 +456,8 @@ button:focus-visible,
   .board-grid {
     max-width: 100%;
   }
+}
+
+.home-hero {
+  margin-bottom: 100px;
 }

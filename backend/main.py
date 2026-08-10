@@ -67,6 +67,25 @@ def validate_orientation(orientation: str) -> str:
     return normalized
 
 
+def get_sunk_ship_groups(player) -> List[Dict[str, Any]]:
+    """
+    Exact cell groups for this player's SUNK ships only — e.g.
+    [{"name": "Destroyer", "cells": [[3, 4], [3, 5]]}, ...].
+
+    Safe to expose for the opponent too: every cell in a sunk ship is
+    already visible as a hit ("X") regardless of hide_ships. This just
+    tells the frontend which adjacent hit cells belong to the same ship,
+    so it can draw a real boundary between two ships sunk next to each
+    other instead of guessing from cell proximity (which breaks exactly
+    when ships are placed touching one another).
+    """
+    return [
+        {"name": ship.name, "cells": [[r, c] for (r, c) in ship.positions]}
+        for ship in player.board.ships
+        if ship.is_sunk()
+    ]
+
+
 def build_game_state(game_data: Dict[str, Any], viewer_index: Optional[int] = None) -> Dict[str, Any]:
     game = game_data["game"]
     if viewer_index is None or viewer_index not in (0, 1):
@@ -85,11 +104,13 @@ def build_game_state(game_data: Dict[str, Any], viewer_index: Optional[int] = No
             "name": viewer.name,
             "board": viewer.board.get_board(hide_ships=False),
             "remaining_ships": viewer.board.remaining_ships(),
+            "sunk_ships": get_sunk_ship_groups(viewer),
         },
         "opponent_player": {
             "name": opponent.name,
             "board": opponent.board.get_board(hide_ships=True),
             "remaining_ships": opponent.board.remaining_ships(),
+            "sunk_ships": get_sunk_ship_groups(opponent),
         },
         "game_over": game.game_over,
         "winner": game.winner,
@@ -254,3 +275,4 @@ def ai_strategies() -> List[Dict[str, str]]:
 @app.get("/")
 def root():
     return {"message": "Battleship AI Backend is running"}
+
