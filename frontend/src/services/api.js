@@ -33,7 +33,7 @@ async function request(path, options = {}) {
   return body;
 }
 
-export function createGame({ mode, player1Name, player2Name, aiStrategy }) {
+export function createGame({ mode, player1Name, player2Name, aiStrategy, aiStrategy2 }) {
   return request("/game/create", {
     method: "POST",
     body: JSON.stringify({
@@ -41,6 +41,7 @@ export function createGame({ mode, player1Name, player2Name, aiStrategy }) {
       player1_name: player1Name ?? "Player 1",
       player2_name: player2Name ?? "Player 2",
       ai_strategy: aiStrategy ?? null,
+      ai_strategy_2: aiStrategy2 ?? null,
     }),
   });
 }
@@ -74,6 +75,10 @@ export function aiMove(gameId) {
 export function getGame(gameId, viewerIndex) {
   const query = viewerIndex !== undefined ? `?viewer_index=${viewerIndex}` : "";
   return request(`/game/${gameId}${query}`);
+}
+
+export function aiStep(gameId) {
+  return request(`/game/${gameId}/ai-step`, { method: "POST" });
 }
 
 export function getStrategies() {

@@ -218,7 +218,20 @@ export default function Game({ mode, onExit }) {
   }
 
   if (!gameState) {
-    return <p>Setting up game...</p>;
+    return (
+      <div className="card" style={{ textAlign: "center" }}>
+        {error ? (
+          <>
+            <p className="error-text">Failed to start game: {error}</p>
+            <button className="btn" onClick={() => startGame(null, 0)}>
+              Retry
+            </button>
+          </>
+        ) : (
+          <p>Setting up game...</p>
+        )}
+      </div>
+    );
   }
 
   if (phase === PHASES.PASS_DEVICE) {

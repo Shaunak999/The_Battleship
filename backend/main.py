@@ -36,6 +36,7 @@ class GameCreateRequest(BaseModel):
     player1_name: Optional[str] = "Player 1"
     player2_name: Optional[str] = "Player 2"
     ai_strategy: Optional[str] = None
+    ai_strategy_2: Optional[str] = None  # for ai_vs_ai mode
 
 
 class PlaceShipRequest(BaseModel):
@@ -125,6 +126,17 @@ def get_game_data(game_id: str) -> Dict[str, Any]:
     return game_data
 
 
+def _place_ai_ships(game_data: Dict[str, Any], ai_instance, player_index: int) -> None:
+    """Place a random fleet for an AI on the given player's board."""
+    if ai_instance is None:
+        return
+    player = game_data["game"].players[player_index]
+    for placement in ai_instance.place_ships_randomly():
+        ship = Ship(placement["name"], placement["size"])
+        ship.place(placement["coordinates"])
+        player.board.ships.append(ship)
+
+
 def place_ai_ships_if_needed(game_data: Dict[str, Any]) -> None:
     """
     Place a full random fleet for the AI player.
@@ -142,26 +154,24 @@ def place_ai_ships_if_needed(game_data: Dict[str, Any]) -> None:
     if ai is None:
         return
 
-    ai_player = game_data["game"].players[1]
-    for placement in ai.place_ships_randomly():
-        ship = Ship(placement["name"], placement["size"])
-        ship.place(placement["coordinates"])
-        ai_player.board.ships.append(ship)
-
+    _place_ai_ships(game_data, ai, 1)
     game_data["ai_ships_placed"] = True
 
 
 @app.post("/game/create")
 def create_game(request: GameCreateRequest) -> Dict[str, Any]:
     mode = request.mode.strip().lower()
-    if mode not in {"human_vs_human", "human_vs_ai"}:
+    if mode not in {"human_vs_human", "human_vs_ai", "ai_vs_ai"}:
         raise HTTPException(
             status_code=400,
-            detail="mode must be 'human_vs_human' or 'human_vs_ai'.",
+            detail="mode must be 'human_vs_human', 'human_vs_ai', or 'ai_vs_ai'.",
         )
 
     ai_strategy = None
     ai_instance = None
+    ai_strategy_2 = None
+    ai_instance_2 = None
+
     if mode == "human_vs_ai":
         ai_strategy = request.ai_strategy or "random"
         try:
@@ -169,9 +179,25 @@ def create_game(request: GameCreateRequest) -> Dict[str, Any]:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    game = Game(request.player1_name or "Player 1", request.player2_name or "Player 2")
+    if mode == "ai_vs_ai":
+        ai_strategy = request.ai_strategy or "random"
+        ai_strategy_2 = request.ai_strategy_2 or "hunt_target"
+        try:
+            ai_instance = get_ai(ai_strategy, board_size=BOARD_SIZE)
+            ai_instance_2 = get_ai(ai_strategy_2, board_size=BOARD_SIZE)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    p1_name = request.player1_name or "Player 1"
+    p2_name = request.player2_name or "Player 2"
+
     if mode == "human_vs_ai":
-        game.players[1].name = AI_STRATEGY_NAMES.get(ai_strategy, request.player2_name or "AI")
+        p2_name = AI_STRATEGY_NAMES.get(ai_strategy, p2_name)
+    elif mode == "ai_vs_ai":
+        p1_name = AI_STRATEGY_NAMES.get(ai_strategy, p1_name)
+        p2_name = AI_STRATEGY_NAMES.get(ai_strategy_2, p2_name)
+
+    game = Game(p1_name, p2_name)
 
     game_id = str(uuid4())
     game_data: Dict[str, Any] = {
@@ -180,9 +206,16 @@ def create_game(request: GameCreateRequest) -> Dict[str, Any]:
         "mode": mode,
         "ai_strategy": ai_strategy,
         "ai": ai_instance,
+        "ai_strategy_2": ai_strategy_2,
+        "ai_2": ai_instance_2,
         "ai_ships_placed": False,
     }
     games[game_id] = game_data
+
+    # For ai_vs_ai, auto-place ships for both players immediately
+    if mode == "ai_vs_ai":
+        _place_ai_ships(game_data, ai_instance, 0)
+        _place_ai_ships(game_data, ai_instance_2, 1)
 
     return {"game_id": game_id, "state": build_game_state(game_data)}
 
@@ -248,6 +281,40 @@ def ai_move(game_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="It is not the AI's turn.")
 
     ai = game_data["ai"]
+    row, col = ai.choose_move()
+    result = game.attack(row, col)
+
+    if result.get("valid"):
+        is_sunk = result["result"] == "sunk"
+        ship_name = result.get("ship") if is_sunk else None
+        ship_size = SHIP_SIZES.get(ship_name) if is_sunk else None
+        ai.process_result(row, col, result["result"], ship_name, ship_size)
+
+    return {
+        "move": {"row": row, "col": col, "coordinate": f"{chr(ord('A') + row)}{col + 1}"},
+        "result": result,
+        "state": build_game_state(game_data),
+    }
+
+
+@app.post("/game/{game_id}/ai-step")
+def ai_step(game_id: str) -> Dict[str, Any]:
+    """Execute one AI move for whichever player's turn it is (ai_vs_ai mode)."""
+    game_data = get_game_data(game_id)
+    game = game_data["game"]
+
+    if game_data["mode"] != "ai_vs_ai":
+        raise HTTPException(status_code=400, detail="ai-step is only available in ai_vs_ai mode.")
+
+    if game.game_over:
+        raise HTTPException(status_code=400, detail="Game is already over.")
+
+    current_idx = game.current_player
+    ai = game_data["ai"] if current_idx == 0 else game_data.get("ai_2")
+
+    if ai is None:
+        raise HTTPException(status_code=400, detail=f"No AI instance for player {current_idx}.")
+
     row, col = ai.choose_move()
     result = game.attack(row, col)
 

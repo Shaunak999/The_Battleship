@@ -25,17 +25,20 @@ from .base_ai import BaseAI, SHIP_DEFINITIONS, BOARD_SIZE
 from .random_ai import RandomAI
 from .hunt_target_ai import HuntTargetAI
 from .probability_ai import ProbabilityAI
+from .neural_ai import NeuralAgent
 
 AI_STRATEGIES = {
     "random": RandomAI,
     "hunt_target": HuntTargetAI,
     "probability": ProbabilityAI,
+    "neural": NeuralAgent,
 }
 
 AI_STRATEGY_NAMES = {
     "random": "Random",
     "hunt_target": "Hunt & Target",
     "probability": "Probability",
+    "neural": "Neural (DQN)",
 }
 
 _DESCRIPTIONS = {
@@ -47,6 +50,10 @@ _DESCRIPTIONS = {
     "probability": (
         "Calculates a probability heat-map of valid ship placements for "
         "every cell and fires at the most likely location."
+    ),
+    "neural": (
+        "DQN with CNN trained via Stable-Baselines3. Learns a firing "
+        "policy through reinforcement learning against random boards."
     ),
 }
 
@@ -95,6 +102,7 @@ __all__ = [
     "RandomAI",
     "HuntTargetAI",
     "ProbabilityAI",
+    "NeuralAgent",
     "get_ai",
     "list_strategies",
     "AI_STRATEGIES",
