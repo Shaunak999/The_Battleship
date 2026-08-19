@@ -12,7 +12,7 @@ export default function Home({ onSelectMode }) {
           Human vs Computer
         </button>
         <button className="btn secondary" onClick={() => onSelectMode("watch_ai")}>
-          👁 Watch AI Battle
+           Computer vs Computer
         </button>
       </div>
     </div>

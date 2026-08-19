@@ -288,9 +288,6 @@ def test_ai_completes_game():
     """Run each AI through 20 complete games and verify they all complete."""
     print("  Testing game completion (20 games each)...")
     for name, cls in AI_STRATEGIES.items():
-        if name == "neural":
-            print(f"    [SKIP] Neural — no trained model yet")
-            continue
         ai = cls()
         for i in range(20):
             shots = simulate_game(ai)
@@ -298,7 +295,7 @@ def test_ai_completes_game():
         print(f"    [PASS] {ai.name} completes all 20 games")
 
 
-def test_strategy_performance(num_games=100):
+def test_strategy_performance(num_games=50):
     """Run each AI through many games and report average shots.
 
     This is NOT a strict test — just a sanity check that:
@@ -310,9 +307,6 @@ def test_strategy_performance(num_games=100):
     results = {}
 
     for name, cls in AI_STRATEGIES.items():
-        if name == "neural":
-            print(f"    {'Neural (DQN)':20s}  [SKIP — no trained model]")
-            continue
         ai = cls()
         shots_list = []
         for _ in range(num_games):

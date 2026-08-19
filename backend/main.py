@@ -1,15 +1,26 @@
+import os
 import re
+import sys
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
+
+# Ensure backend directory is in sys.path for direct or module execution
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from ai import AI_STRATEGY_NAMES, get_ai, list_strategies
-from ai.base_ai import BOARD_SIZE, SHIP_DEFINITIONS
-from game.game import Game
-from game.ship import Ship
+try:
+    from ai import AI_STRATEGY_NAMES, get_ai, list_strategies
+    from ai.base_ai import BOARD_SIZE, SHIP_DEFINITIONS
+    from game.game import Game
+    from game.ship import Ship
+except ImportError:
+    from backend.ai import AI_STRATEGY_NAMES, get_ai, list_strategies
+    from backend.ai.base_ai import BOARD_SIZE, SHIP_DEFINITIONS
+    from backend.game.game import Game
+    from backend.game.ship import Ship
 
 # Precomputed once instead of linear-scanning SHIP_DEFINITIONS on every sunk event
 SHIP_SIZES: Dict[str, int] = dict(SHIP_DEFINITIONS)
@@ -196,6 +207,9 @@ def create_game(request: GameCreateRequest) -> Dict[str, Any]:
     elif mode == "ai_vs_ai":
         p1_name = AI_STRATEGY_NAMES.get(ai_strategy, p1_name)
         p2_name = AI_STRATEGY_NAMES.get(ai_strategy_2, p2_name)
+        if p1_name == p2_name:
+            p1_name = f"{p1_name} 1"
+            p2_name = f"{p2_name} 2"
 
     game = Game(p1_name, p2_name)
 

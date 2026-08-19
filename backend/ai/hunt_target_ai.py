@@ -19,24 +19,25 @@ from .base_ai import BaseAI
 
 
 class HuntTargetAI(BaseAI):
-    """Hunt & Target AI with checkerboard parity hunting and directional targeting.
+    """Hunt & Target AI with parity hunting, directional targeting, and
+    proper reversal on miss.
 
     Hunt Phase
     ----------
-    Instead of random shots, the AI uses a **checkerboard pattern** so that
-    every ship of size ≥ 2 is guaranteed to be crossed.  Cells where
-    ``(row + col) % 2 == 0`` are tried first (the "even parity" squares),
-    which cuts the hunt space roughly in half.
+    Uses a **checkerboard pattern** so that every ship of size ≥ 2 is
+    guaranteed to be crossed.  Cells where ``(row + col) % 2 == 0`` are
+    tried first (the "even parity" squares), cutting the hunt space
+    roughly in half.
 
     Target Phase
     ------------
-    When a hit is scored:
-
-    1. Push the four cardinal neighbours of the hit onto a target queue.
-    2. Pop cells from the queue and fire.
-    3. If a second consecutive hit is scored, lock onto that orientation
-       (horizontal or vertical) and continue in that direction.
-    4. When the ship is sunk, clear the target state and return to hunting.
+    1. On a hit, add cardinal neighbours to the target queue.
+    2. On a second hit, lock onto the orientation (horizontal or vertical)
+       and prune the queue to only cells along that axis.
+    3. On a miss while targeting, let the queue try the opposite direction
+       naturally — no extra shots wasted on the wrong side.
+    4. On a ship sunk, clear ALL target state and return to hunt mode.
+       No re-targeting around the sunk area.
     """
 
     def __init__(self, board_size: int = 10):
@@ -70,8 +71,8 @@ class HuntTargetAI(BaseAI):
 
         # --- Target state ---
         self._target_queue: deque[tuple[int, int]] = deque()
-        self._current_hits: list[tuple[int, int]] = []  # hits for the ship currently being targeted
-        self._orientation: Optional[str] = None  # "horizontal" or "vertical" once determined
+        self._current_hits: list[tuple[int, int]] = []
+        self._orientation: Optional[str] = None  # "horizontal" or "vertical"
         self._is_targeting: bool = False
 
     # ------------------------------------------------------------------
@@ -121,8 +122,10 @@ class HuntTargetAI(BaseAI):
         self._record_shot(row, col, result, sunk_ship_name, sunk_ship_size)
 
         if result == "miss":
-            # If we were targeting along an orientation and missed,
-            # we may need to reverse direction.
+            # Miss during targeting: do nothing special.
+            # The target queue still has cells from the other direction
+            # (or other valid directions), so choose_move() will pop
+            # them naturally.
             return
 
         if result == "hit":
@@ -132,9 +135,12 @@ class HuntTargetAI(BaseAI):
             self._enqueue_neighbours(row, col)
 
         elif result == "sunk":
-            self._current_hits.append((row, col))
-            # Ship is done — clear targeting state
-            self._finish_targeting()
+            # Ship is sunk — clear ALL target state, return to hunt mode.
+            # No re-targeting around the sunk ship area.
+            self._current_hits.clear()
+            self._target_queue.clear()
+            self._orientation = None
+            self._is_targeting = False
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -195,39 +201,4 @@ class HuntTargetAI(BaseAI):
                 pruned.append((r, c))
         self._target_queue = pruned
 
-    def _finish_targeting(self) -> None:
-        """Reset targeting state after a ship is sunk."""
-        # Mark the cells belonging to the sunk ship so we can
-        # identify any "stale" hits left from a different ship.
-        sunk_set = set(self._current_hits)
 
-        # Check if there are any un-sunk hits remaining from
-        # a previous ship that was hit while targeting this one.
-        leftover_hits = [
-            h for h in self.hits
-            if h not in self.misses and h not in sunk_set
-            and self._has_unsunk_neighbours(h)
-        ]
-
-        self._current_hits = []
-        self._orientation = None
-        self._target_queue.clear()
-
-        # If there are leftover un-sunk hits, re-enter target mode
-        if leftover_hits:
-            self._is_targeting = True
-            for h in leftover_hits:
-                self._current_hits.append(h)
-                self._enqueue_neighbours(h[0], h[1])
-        else:
-            self._is_targeting = False
-
-    def _has_unsunk_neighbours(self, cell: tuple[int, int]) -> bool:
-        """Return True if a hit cell has at least one un-attacked neighbour,
-        suggesting the ship it belongs to may not be sunk yet."""
-        r, c = cell
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nr, nc = r + dr, c + dc
-            if self._is_valid(nr, nc) and (nr, nc) not in self.shots_taken:
-                return True
-        return False

@@ -20,13 +20,23 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-# Ensure backend/ is on the path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Ensure backend/ and repo root are on the path
+backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+repo_dir = os.path.abspath(os.path.join(backend_dir, ".."))
+for p in [backend_dir, repo_dir]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
-from ai.base_ai import BaseAI, SHIP_DEFINITIONS, BOARD_SIZE
-from ai.random_ai import RandomAI
-from ai.hunt_target_ai import HuntTargetAI
-from ai.probability_ai import ProbabilityAI
+try:
+    from ai.base_ai import BaseAI, SHIP_DEFINITIONS, BOARD_SIZE
+    from ai.random_ai import RandomAI
+    from ai.hunt_target_ai import HuntTargetAI
+    from ai.probability_ai import ProbabilityAI
+except ImportError:
+    from backend.ai.base_ai import BaseAI, SHIP_DEFINITIONS, BOARD_SIZE
+    from backend.ai.random_ai import RandomAI
+    from backend.ai.hunt_target_ai import HuntTargetAI
+    from backend.ai.probability_ai import ProbabilityAI
 
 
 # ── Simulation helper ──────────────────────────────────────────────────────
@@ -123,7 +133,10 @@ def evaluate(
     total_shots = 0
     win_shots: List[int] = []
 
-    for _ in range(num_games):
+    for i in range(num_games):
+        if (i + 1) % max(1, num_games // 10) == 0:
+            print(f"\r    Progress: {i + 1}/{num_games}", end="", flush=True)
+        
         board, placements = generate_random_board()
         won, shots = play_one_game(attacker, board, placements, max_shots)
         if won:
@@ -131,6 +144,8 @@ def evaluate(
             win_shots.append(shots)
         total_shots += shots
 
+    print("\r" + " " * 30 + "\r", end="", flush=True)  # Clear progress line
+    
     win_rate = wins / num_games * 100
     avg_shots = total_shots / num_games
     avg_win_shots = np.mean(win_shots) if win_shots else float("nan")
@@ -153,7 +168,10 @@ def main():
     args = parser.parse_args()
 
     # Import here so the script works even if torch isn't installed yet
-    from ..neural_ai import NeuralAgent
+    try:
+        from ai.neural_ai import NeuralAgent
+    except ImportError:
+        from backend.ai.neural_ai import NeuralAgent
 
     print("=" * 65)
     print("  BATTLESHIP AI EVALUATION")
@@ -170,7 +188,7 @@ def main():
     try:
         neural = NeuralAgent(model_path=args.model)
         neural.reset()  # triggers model load
-        competitors.append((neural, "Neural (DQN)"))
+        competitors.append((neural, "Neural"))
     except FileNotFoundError as e:
         print(f"\n  ⚠  Could not load NeuralAgent: {e}")
         print("     Training the model first: python -m ai.neural.train\n")
@@ -201,24 +219,6 @@ def main():
         )
 
     print(f"{'=' * 65}")
-
-    # Pairwise win rates (NeuralAgent vs each baseline)
-    neural_stats = next((r for r in results if "Neural" in r["label"]), None)
-    if neural_stats:
-        print(f"\n  NeuralAgent vs baselines:")
-        for r in results:
-            if r["label"] == neural_stats["label"]:
-                continue
-            # Run head-to-head
-            neural_wins = 0
-            for _ in range(args.games):
-                board, placements = generate_random_board()
-                neural = NeuralAgent(model_path=args.model)
-                won, _ = play_one_game(neural, board, placements)
-                if won:
-                    neural_wins += 1
-            print(f"    vs {r['label']:<15s}: {neural_wins}/{args.games} "
-                  f"({neural_wins/args.games*100:.1f}%)")
 
 
 if __name__ == "__main__":

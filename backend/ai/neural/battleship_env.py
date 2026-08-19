@@ -1,28 +1,31 @@
 """
-Gymnasium-compatible Battleship environment.
+Gymnasium-compatible Battleship environment with rich multi-channel features.
 
-Models only the **firing** side — the opponent places ships randomly
-each episode.  The agent observes its own shot history on a 10×10
-grid and picks one of 100 cells per turn.
+Models the **firing** side — the opponent places ships randomly
+each episode. The agent observes a 6×10×10 feature tensor combining raw
+shot history with combinatorial probability priors and target boundaries.
 
 Observation
 -----------
-4 × 10 × 10 float32 tensor (channels-first):
-    0 – un-attacked mask  (1 = not yet shot, 0 = already shot)
-    1 – hit mask          (1 = hit)
-    2 – miss mask         (1 = miss)
-    3 – sunk mask         (1 = belongs to a sunk ship)
+6 × 10 × 10 float32 tensor (channels-first):
+    0 – un-attacked mask (1 = not yet shot, 0 = already shot)
+    1 – hit mask (1 = hit)
+    2 – miss mask (1 = miss)
+    3 – sunk mask (1 = belongs to a sunk ship)
+    4 – normalized probability density heat-map
+    5 – target boundary & parity layer
 
 Action space
 ------------
-Discrete(100)  →  cell index 0-99 maps to (row, col) = (a // 10, a % 10)
+Discrete(100) → cell index 0-99 maps to (row, col) = (a // 10, a % 10)
 
 Reward
 ------
-    miss  :  -0.1
-    hit   :  +1.0
-    sunk  :  +2.0 × ship_size
-    win   :  +5.0  (bonus, added on the final sinking shot)
+    step penalty : -1.0  (strictly encourages shortest-path to victory)
+    hit          : +3.0
+    target bonus : +2.0  (hit adjacent to an unsunk hit)
+    sunk         : +4.0 × ship_size
+    win          : +10.0
 """
 
 from __future__ import annotations
@@ -80,7 +83,7 @@ def _place_ships_randomly(
 # ── Gymnasium Environment ─────────────────────────────────────────────────
 
 class BattleshipEnv(gym.Env):
-    """A Battleship firing environment for Stable-Baselines3 DQN."""
+    """A Battleship firing environment with 6-channel state and step-penalized rewards."""
 
     metadata = {"render_modes": []}
 
@@ -89,10 +92,11 @@ class BattleshipEnv(gym.Env):
         self.board_size = board_size
         self.n_cells = board_size * board_size
 
-        # Observation: 4 channels × 10 × 10
+        # Observation: 6 channels × 10 × 10
         self.observation_space = spaces.Box(
-            low=0.0, high=1.0,
-            shape=(4, board_size, board_size),
+            low=0.0,
+            high=1.0,
+            shape=(6, board_size, board_size),
             dtype=np.float32,
         )
 
@@ -143,11 +147,19 @@ class BattleshipEnv(gym.Env):
         row, col = divmod(action, self.board_size)
         cell = (row, col)
 
-        # If cell was already shot, penalize and don't count as a turn
+        # If cell was already shot, heavy penalty
         if cell in self._shots:
-            return self._get_obs(), -1.0, False, False, {"result": "repeat"}
+            return self._get_obs(), -5.0, False, False, {"result": "repeat"}
 
+        # Base step penalty: -1.0 for every turn taken to minimize total shots
+        reward = -1.0
         self._shots.add(cell)
+
+        # Check if cell was adjacent to an existing unsunk hit before this shot
+        unsunk_hits = self._hits - self._sunk_cells
+        was_adjacent_to_hit = any(
+            abs(row - hr) + abs(col - hc) == 1 for hr, hc in unsunk_hits
+        )
 
         if cell in self._board:
             ship_name, ship_idx = self._board[cell]
@@ -155,20 +167,23 @@ class BattleshipEnv(gym.Env):
             self._hits_scored += 1
             self._ship_hp[ship_idx].discard(cell)
 
+            reward += 3.0
+            if was_adjacent_to_hit:
+                reward += 2.0  # Targeted hit bonus
+
             # Check if ship is sunk
             if len(self._ship_hp[ship_idx]) == 0:
                 self._sunk_ships.add(ship_idx)
-                # Mark all cells of this ship as sunk
                 for co, (_, si) in self._board.items():
                     if si == ship_idx:
                         self._sunk_cells.add(co)
 
                 ship_size = next(s for n, s in SHIP_DEFINITIONS if n == ship_name)
-                reward = 2.0 * ship_size
+                reward += 4.0 * ship_size
 
                 # Check if game is won
                 if self._hits_scored >= self._total_ship_cells:
-                    reward += 5.0
+                    reward += 10.0
                     return self._get_obs(), reward, True, False, {
                         "result": "win",
                         "ship": ship_name,
@@ -179,10 +194,10 @@ class BattleshipEnv(gym.Env):
                     "ship": ship_name,
                 }
             else:
-                return self._get_obs(), 1.0, False, False, {"result": "hit"}
+                return self._get_obs(), reward, False, False, {"result": "hit"}
         else:
             self._misses.add(cell)
-            return self._get_obs(), -0.1, False, False, {"result": "miss"}
+            return self._get_obs(), reward, False, False, {"result": "miss"}
 
     # ── Action masking (for SB3 DQN) ──────────────────────────────────
 
@@ -197,19 +212,72 @@ class BattleshipEnv(gym.Env):
 
     def _get_obs(self) -> np.ndarray:
         board = self.board_size
-        obs = np.zeros((4, board, board), dtype=np.float32)
+        obs = np.zeros((6, board, board), dtype=np.float32)
 
+        unsunk_hits = self._hits - self._sunk_cells
+
+        # Surviving ship sizes
+        remaining_sizes = [
+            size for idx, (_, size) in enumerate(SHIP_DEFINITIONS)
+            if idx not in self._sunk_ships
+        ]
+
+        min_size = min(remaining_sizes) if remaining_sizes else 2
+
+        # 0: Unattacked, 1: Hits, 2: Misses, 3: Sunk
         for r in range(board):
             for c in range(board):
                 cell = (r, c)
                 if cell not in self._shots:
-                    obs[0, r, c] = 1.0  # unattacked
+                    obs[0, r, c] = 1.0
                 if cell in self._hits:
                     obs[1, r, c] = 1.0
                 if cell in self._misses:
                     obs[2, r, c] = 1.0
                 if cell in self._sunk_cells:
                     obs[3, r, c] = 1.0
+
+        # 4: Probability Heatmap Layer
+        heatmap = np.zeros((board, board), dtype=np.float32)
+        invalid_mask = self._misses | self._sunk_cells
+
+        for size in remaining_sizes:
+            # Horizontal placements
+            for r in range(board):
+                for c in range(board - size + 1):
+                    coords = [(r, c + i) for i in range(size)]
+                    if not any(co in invalid_mask for co in coords):
+                        for cr, cc in coords:
+                            heatmap[cr, cc] += 1.0
+
+            # Vertical placements
+            for r in range(board - size + 1):
+                for c in range(board):
+                    coords = [(r + i, c) for i in range(size)]
+                    if not any(co in invalid_mask for co in coords):
+                        for cr, cc in coords:
+                            heatmap[cr, cc] += 1.0
+
+        # Zero out shot cells in heatmap and normalize
+        for r, c in self._shots:
+            heatmap[r, c] = 0.0
+        max_h = heatmap.max()
+        if max_h > 0:
+            obs[4] = heatmap / max_h
+
+        # 5: Target boundary & parity mask
+        if unsunk_hits:
+            for r, c in unsunk_hits:
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < board and 0 <= nc < board and (nr, nc) not in self._shots:
+                        obs[5, nr, nc] = 1.0
+        else:
+            # Parity hunting pattern for smallest remaining ship
+            for r in range(board):
+                for c in range(board):
+                    if (r + c) % min_size == 0 and (r, c) not in self._shots:
+                        obs[5, r, c] = 1.0
 
         return obs
 
@@ -218,3 +286,4 @@ class BattleshipEnv(gym.Env):
     def get_ship_map(self) -> Dict[Tuple[int, int], str]:
         """Return the hidden board for evaluation / debugging."""
         return {co: name for co, (name, _) in self._board.items()}
+

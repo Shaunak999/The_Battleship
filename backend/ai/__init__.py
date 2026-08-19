@@ -38,7 +38,7 @@ AI_STRATEGY_NAMES = {
     "random": "Random",
     "hunt_target": "Hunt & Target",
     "probability": "Probability",
-    "neural": "Neural (DQN)",
+    "neural": "Neural",
 }
 
 _DESCRIPTIONS = {

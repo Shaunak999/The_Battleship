@@ -43,7 +43,7 @@ export default function WatchAiBattle({ onExit }) {
 
   async function startWatching() {
     if (!player1Strategy || !player2Strategy) {
-      setError("Please select strategies for both AIs.");
+      setError("Please select strategies.");
       return;
     }
     setError(null);
@@ -129,10 +129,8 @@ export default function WatchAiBattle({ onExit }) {
     return (
       <div className="app-shell">
         <div className="card" style={{ maxWidth: 520, width: "100%" }}>
-          <h2>👁 Watch AI Battle</h2>
-          <p style={{ color: "var(--color-text-muted)", marginTop: 0 }}>
-            Pick two AI strategies and watch them play against each other.
-          </p>
+          <h2> Computer Battle</h2>
+           
 
           {error && <div className="error-text">{error}</div>}
 
@@ -228,17 +226,16 @@ export default function WatchAiBattle({ onExit }) {
                 color: "var(--color-text-muted)",
               }}
             >
-              <span>Fast (100ms)</span>
-              <span>Slow (1500ms)</span>
+              
             </div>
           </div>
 
           <div style={{ display: "flex", gap: 12, marginTop: 20 }}>
             <button className="btn" onClick={startWatching} style={{ flex: 1 }}>
-              ▶ Start Battle
+               Start Battle
             </button>
             <button className="btn secondary" onClick={handleBack}>
-              ← Back
+               Back
             </button>
           </div>
         </div>
@@ -270,7 +267,7 @@ export default function WatchAiBattle({ onExit }) {
         <div>
           {phase === "done" ? (
             <span>
-              🏆 <strong>{winner}</strong> wins!
+              <strong>{winner}</strong> wins!
             </span>
           ) : (
             <span>
@@ -288,7 +285,7 @@ export default function WatchAiBattle({ onExit }) {
               onClick={togglePause}
               style={{ padding: "6px 14px", fontSize: "0.85rem" }}
             >
-              {paused ? "▶ Resume" : "⏸ Pause"}
+              {paused ? " Resume" : " Pause"}
             </button>
           )}
           <button
@@ -296,7 +293,7 @@ export default function WatchAiBattle({ onExit }) {
             onClick={handleBack}
             style={{ padding: "6px 14px", fontSize: "0.85rem" }}
           >
-            ← Back
+             Back
           </button>
         </div>
       </div>
@@ -340,10 +337,10 @@ export default function WatchAiBattle({ onExit }) {
       {phase === "done" && (
         <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
           <button className="btn" onClick={startWatching}>
-            🔄 Watch Again
+             Watch Again
           </button>
           <button className="btn secondary" onClick={handleBack}>
-            ← Back to Menu
+             Back to Menu
           </button>
         </div>
       )}

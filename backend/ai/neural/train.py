@@ -26,14 +26,14 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 from .battleship_env import BattleshipEnv
 
 
-# ── Custom CNN features extractor (handles 4×10×10 input) ─────────────────
+# ── Custom CNN features extractor (handles 6×10×10 input) ─────────────────
 
 class BattleshipCNN(BaseFeaturesExtractor):
-    """Small CNN that works with the 4×10×10 Battleship observation.
+    """CNN that works with the 6×10×10 Battleship observation tensor.
 
     Architecture:
-        Conv2d(4→32, 3×3) → ReLU → Conv2d(32→64, 3×3) → ReLU
-        → Conv2d(64→64, 3×3) → ReLU → Flatten → Linear(→256) → ReLU
+        Conv2d(6→32, 3×3, pad 1) → ReLU → Conv2d(32→64, 3×3, pad 1) → ReLU
+        → Conv2d(64→128, 3×3, pad 1) → ReLU → Flatten → Linear(→256) → ReLU
     """
 
     def __init__(
@@ -42,14 +42,14 @@ class BattleshipCNN(BaseFeaturesExtractor):
         features_dim: int = 256,
     ):
         super().__init__(observation_space, features_dim)
-        n_channels = observation_space.shape[0]  # 4
+        n_channels = observation_space.shape[0]  # 6
 
         self.cnn = nn.Sequential(
             nn.Conv2d(n_channels, 32, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Flatten(),
         )
