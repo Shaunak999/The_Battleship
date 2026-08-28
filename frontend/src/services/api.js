@@ -1,15 +1,14 @@
-const BASE_URL = "http://localhost:8000";
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const WS_BASE = import.meta.env.VITE_WS_URL || "ws://localhost:8000";
 
 const COLS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
 
-/**
- * Convert a (row, col) grid index into the backend's coordinate string,
- * e.g. row=4, col=4 -> "E5". This is the ONLY place this conversion
- * should happen — components deal in row/col ints, api.js deals in
- * the "A1" strings the backend expects.
- */
 export function toCoordinate(row, col) {
   return `${COLS[row]}${col + 1}`;
+}
+
+export function getWsUrl(gameId, role) {
+  return `${WS_BASE}/ws/${gameId}/${role}`;
 }
 
 async function request(path, options = {}) {
@@ -22,7 +21,7 @@ async function request(path, options = {}) {
   try {
     body = await res.json();
   } catch {
-    // no JSON body — leave body as null
+    // no JSON body
   }
 
   if (!res.ok) {
@@ -83,4 +82,31 @@ export function aiStep(gameId) {
 
 export function getStrategies() {
   return request("/ai/strategies");
+}
+
+// ── Multiplayer REST ──────────────────────────────────────────────────
+
+export function mpCreateGame(playerName) {
+  return request("/mp/create", {
+    method: "POST",
+    body: JSON.stringify({ player_name: playerName }),
+  });
+}
+
+export function mpJoinGame(gameId, playerName) {
+  return request("/mp/join", {
+    method: "POST",
+    body: JSON.stringify({ game_id: gameId, player_name: playerName }),
+  });
+}
+
+export function mpSpectateGame(gameId) {
+  return request("/mp/spectate", {
+    method: "POST",
+    body: JSON.stringify({ game_id: gameId }),
+  });
+}
+
+export function mpListRooms() {
+  return request("/mp/rooms");
 }

@@ -32,7 +32,7 @@ export default function Game({ mode, onExit }) {
 
   // HvH: per-player fleet visibility. Index 0 = Player 1, index 1 = Player 2.
   // Each player's hide state persists independently across turns.
-  const [fleetHidden, setFleetHidden] = useState([false, false]);
+  const [fleetHidden, setFleetHidden] = useState([true, true]);
 
   // Human vs Human: create the game immediately on mount.
   useEffect(() => {
@@ -326,7 +326,7 @@ export default function Game({ mode, onExit }) {
                 }
                 id="toggle-hide-fleet"
               >
-                {currentHidden ? "👁 Show Fleet" : "🙈 Hide Fleet"}
+                {currentHidden ? " Show Fleet" : " Hide Fleet"}
               </button>
             )}
           </div>

@@ -25,6 +25,7 @@ export default function WatchAiBattle({ onExit }) {
 
   const cancelledRef = useRef(false);
   const timerRef = useRef(null);
+  const pausedRef = useRef(false);
 
   useEffect(() => {
     getStrategies()
@@ -79,7 +80,7 @@ export default function WatchAiBattle({ onExit }) {
       if (cancelledRef.current) return;
 
       // If paused, just re-schedule without advancing
-      if (paused) {
+      if (pausedRef.current) {
         playLoop(gameId);
         return;
       }
@@ -113,7 +114,10 @@ export default function WatchAiBattle({ onExit }) {
   }
 
   function togglePause() {
-    setPaused((p) => !p);
+    setPaused((p) => {
+      pausedRef.current = !p;
+      return !p;
+    });
   }
 
   function handleBack() {
