@@ -181,7 +181,6 @@ export default function MultiplayerGame({ gameId, role, playerName, onExit }) {
     return (
       <div className="app-shell">
         <div className="card" style={{ textAlign: "center", maxWidth: 440 }}>
-          <h2>Game: {gameId}</h2>
           <p style={{ color: "var(--color-text-muted)", marginTop: 8 }}>
             You are <strong>{playerName}</strong> ({role === "player1" ? "Player 1" : "Player 2"})
           </p>
