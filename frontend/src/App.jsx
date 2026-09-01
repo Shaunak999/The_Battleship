@@ -7,7 +7,11 @@ import MultiplayerGame from "./pages/MultiplayerGame";
 import SpectatorView from "./pages/SpectatorView";
 
 export default function App() {
-  const [mode, setMode] = useState(null);
+  // Detect ?join=GAMEID in the URL so the friend's link auto-fills the Join tab.
+  const urlParams = new URLSearchParams(window.location.search);
+  const joinCode = urlParams.get("join")?.toUpperCase() || null;
+
+  const [mode, setMode] = useState(joinCode ? "lan_multiplayer" : null);
   const [mpConfig, setMpConfig] = useState(null);
 
   if (!mode) {
@@ -22,8 +26,10 @@ export default function App() {
     if (!mpConfig) {
       return (
         <MultiplayerLobby
-          onExit={() => setMode(null)}
+          onExit={() => { setMode(null); window.history.replaceState({}, "", "/"); }}
           onJoin={(config) => setMpConfig(config)}
+          initialTab={joinCode ? "join" : "create"}
+          initialGameId={joinCode || ""}
         />
       );
     }

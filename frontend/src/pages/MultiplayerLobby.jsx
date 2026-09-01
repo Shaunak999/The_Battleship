@@ -1,18 +1,31 @@
 import { useState } from "react";
 import { mpCreateGame, mpJoinGame, mpSpectateGame } from "../services/api";
 
-export default function MultiplayerLobby({ onExit, onJoin }) {
-  const [tab, setTab] = useState("create"); // create | join | spectate
+export default function MultiplayerLobby({ onExit, onJoin, initialTab = "create", initialGameId = "" }) {
+  const [tab, setTab] = useState(initialTab); // create | join | spectate
   const [playerName, setPlayerName] = useState("");
-  const [gameId, setGameId] = useState("");
+  const [gameId, setGameId] = useState(initialGameId);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [shareInfo, setShareInfo] = useState(null); // { gameId, link }
+  const [copied, setCopied] = useState(false);
+
+  function handleCopyLink(link) {
+    navigator.clipboard.writeText(link).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
 
   async function handleCreate() {
     setError(null);
     setLoading(true);
+    setShareInfo(null);
     try {
       const res = await mpCreateGame(playerName || "Player 1");
+      // Build share link from the current page origin (correct LAN IP automatically)
+      const link = `${window.location.origin}/?join=${res.game_id}`;
+      setShareInfo({ gameId: res.game_id, link });
       onJoin({ gameId: res.game_id, role: "player1", playerName: res.player_name });
     } catch (err) {
       setError(err.message);
@@ -100,6 +113,7 @@ export default function MultiplayerLobby({ onExit, onJoin }) {
               border: "1px solid var(--color-water-border)",
               fontSize: "1rem",
               outline: "none",
+              boxSizing: "border-box",
             }}
           />
         </div>
@@ -126,6 +140,7 @@ export default function MultiplayerLobby({ onExit, onJoin }) {
                 letterSpacing: "0.1em",
                 outline: "none",
                 textTransform: "uppercase",
+                boxSizing: "border-box",
               }}
             />
           </div>
@@ -155,6 +170,42 @@ export default function MultiplayerLobby({ onExit, onJoin }) {
           </button>
         </div>
 
+        {/* Share link — shown after creating a game */}
+        {shareInfo && (
+          <div style={{
+            marginTop: 20,
+            padding: "14px 16px",
+            borderRadius: "var(--radius)",
+            background: "var(--color-user-light)",
+            border: "1px solid var(--color-user)",
+          }}>
+            <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: 6, color: "var(--color-user)" }}>
+              🎮 Game created! Share this link with your friend:
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <code style={{
+                flex: 1,
+                fontSize: "0.78rem",
+                wordBreak: "break-all",
+                background: "rgba(0,0,0,0.08)",
+                padding: "6px 8px",
+                borderRadius: 4,
+              }}>
+                {shareInfo.link}
+              </code>
+              <button
+                className="btn secondary"
+                style={{ whiteSpace: "nowrap", padding: "6px 12px", fontSize: "0.82rem" }}
+                onClick={() => handleCopyLink(shareInfo.link)}
+              >
+                {copied ? "✓ Copied!" : "Copy"}
+              </button>
+            </div>
+            <div style={{ fontSize: "0.78rem", marginTop: 8, opacity: 0.7 }}>
+              Or share just the code: <strong style={{ letterSpacing: "0.1em" }}>{shareInfo.gameId}</strong>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
