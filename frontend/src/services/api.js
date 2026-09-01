@@ -1,5 +1,12 @@
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
-const WS_BASE = import.meta.env.VITE_WS_URL || "ws://localhost:8000";
+// Dynamically use the host the page was served from so LAN players
+// (on the same WiFi) automatically hit the correct backend server
+// instead of their own localhost.
+const _host = import.meta.env.VITE_API_URL
+  ? new URL(import.meta.env.VITE_API_URL).host
+  : `${window.location.hostname}:8000`;
+
+const BASE_URL = import.meta.env.VITE_API_URL || `http://${_host}`;
+const WS_BASE  = import.meta.env.VITE_WS_URL  || `ws://${_host}`;
 
 const COLS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
 
