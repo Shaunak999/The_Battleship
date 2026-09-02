@@ -260,24 +260,36 @@ def place_ai_ships_if_needed(game_data: Dict[str, Any]) -> None:
 # ── Broadcast helpers for multiplayer ──────────────────────────────────
 
 async def broadcast_to_room(room: Room, message: Dict[str, Any]) -> None:
-    """Send a JSON message to every connected client in the room."""
+    """Send a JSON message to every connected client in the room concurrently."""
     data = json.dumps(message)
+    tasks = []
     for role in Role:
         for ws in list(room.connections[role]):
-            try:
-                await ws.send_text(data)
-            except Exception:
-                room.remove_connection(ws)
+            async def _send(w=ws):
+                try:
+                    await w.send_text(data)
+                except Exception:
+                    room.remove_connection(w)
+            tasks.append(_send())
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def send_to_role(room: Room, role: Role, message: Dict[str, Any]) -> None:
-    """Send a JSON message to all connections of a specific role."""
+    """Send a JSON message to all connections of a specific role concurrently."""
+    connections = list(room.connections[role])
+    if not connections:
+        return
     data = json.dumps(message)
-    for ws in list(room.connections[role]):
-        try:
-            await ws.send_text(data)
-        except Exception:
-            room.remove_connection(ws)
+    tasks = []
+    for ws in connections:
+        async def _send(w=ws):
+            try:
+                await w.send_text(data)
+            except Exception:
+                room.remove_connection(w)
+        tasks.append(_send())
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def send_to_ws(ws: WebSocket, message: Dict[str, Any]) -> None:
@@ -877,17 +889,22 @@ async def handle_mp_attack(room: Room, sender_ws: WebSocket, ws_role: Role, play
         attack_result["ship_name"] = result.get("ship")
         attack_result["ship_size"] = SHIP_SIZES.get(result.get("ship"))
 
-    # Send to all clients
+    # Send to all clients concurrently
     await broadcast_to_room(room, attack_result)
 
-    # Send updated states to each player (role-aware)
-    for p_idx in range(2):
-        p_role = Role.PLAYER_1 if p_idx == 0 else Role.PLAYER_2
-        state = build_player_state(room, p_idx)
-        await send_to_role(room, p_role, {"type": "state_update", "state": state})
+    # Build and send updated states to both players concurrently
+    p1_state = build_player_state(room, 0)
+    p2_state = build_player_state(room, 1)
 
-    # Send full state to spectators
-    await send_to_role(room, Role.SPECTATOR, {
-        "type": "spectator_state",
-        "state": build_spectator_state(room),
-    })
+    await asyncio.gather(
+        send_to_role(room, Role.PLAYER_1, {"type": "state_update", "state": p1_state}),
+        send_to_role(room, Role.PLAYER_2, {"type": "state_update", "state": p2_state}),
+        return_exceptions=True,
+    )
+
+    # Only send full state to spectators if spectators exist
+    if room.spectator_count > 0:
+        await send_to_role(room, Role.SPECTATOR, {
+            "type": "spectator_state",
+            "state": build_spectator_state(room),
+        })

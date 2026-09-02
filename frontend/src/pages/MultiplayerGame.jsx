@@ -297,68 +297,22 @@ export default function MultiplayerGame({ gameId, role, playerName, onExit }) {
     );
   }
 
-  if (phase === PHASES.RESULTS) {
-    const didIWin = winner === gameState?.your_player?.name;
-
-    return (
-      <div className="app-shell">
-        <h2 style={{ fontSize: "1.5rem", fontWeight: 700, textAlign: "center" }}>
-          {winner ? `${winner} Wins` : "Game Over"}
-        </h2>
-
-        {gameState && (
-          <div className="boards-row">
-            <div>
-              <Board
-                title={gameState.your_player.name}
-                board={gameState.your_player.board}
-                variant="user"
-                sunkShips={gameState.your_player.sunk_ships}
-              />
-              <div style={{ marginTop: 12 }}>
-                <ShipStatus
-                  title={`${gameState.your_player.name}'s Fleet`}
-                  remainingShips={gameState.your_player.remaining_ships}
-                />
-              </div>
-            </div>
-            <div>
-              <Board
-                title={gameState.opponent_player.name}
-                board={gameState.opponent_player.board}
-                variant="enemy"
-                sunkShips={gameState.opponent_player.sunk_ships}
-              />
-              <div style={{ marginTop: 12 }}>
-                <ShipStatus
-                  title={`${gameState.opponent_player.name}'s Fleet`}
-                  remainingShips={gameState.opponent_player.remaining_ships}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        <button className="btn mp-continue-btn" onClick={onExit}>
-          Continue
-        </button>
-      </div>
-    );
-  }
-
-  // ── BATTLE PHASE ──────────────────────────────────────────────────
+  // ── BATTLE & RESULTS PHASE (Pop-up Modal on Win) ───────────────────
   if (!gameState) return <p>Loading game state...</p>;
 
-  const isMyTurn = gameState.current_player === playerIndex;
+  const isGameOver = phase === PHASES.RESULTS || gameState.game_over;
+  const isMyTurn = !isGameOver && gameState.current_player === playerIndex;
   const myName = gameState.your_player.name;
   const oppName = gameState.opponent_player.name;
 
-  const statusHeadline = isMyTurn
-    ? `Your turn — attack ${oppName}'s board`
-    : `Waiting for ${gameState.current_player_name}...`;
+  const statusHeadline = isGameOver
+    ? "Game Over"
+    : isMyTurn
+      ? `Your turn — attack ${oppName}'s board`
+      : `Waiting for ${gameState.current_player_name}...`;
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={{ position: "relative" }}>
       <GameStatus
         headline={statusHeadline}
         isMyTurn={isMyTurn}
@@ -407,6 +361,51 @@ export default function MultiplayerGame({ gameId, role, playerName, onExit }) {
       <button className="btn secondary" style={{ marginTop: 12 }} onClick={onExit}>
         Leave Game
       </button>
+
+      {/* Win / Game Over Pop Up Modal Overlay */}
+      {isGameOver && (
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          backgroundColor: "rgba(0, 0, 0, 0.55)",
+          backdropFilter: "blur(4px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 1000,
+        }}>
+          <div style={{
+            background: "var(--color-surface)",
+            padding: "32px 28px",
+            borderRadius: "16px",
+            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.25)",
+            textAlign: "center",
+            maxWidth: 360,
+            width: "90%",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "20px",
+          }}>
+            <h2 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0, color: "var(--color-text)" }}>
+              {winner ? `${winner} Wins` : "Game Over"}
+            </h2>
+            <button
+              className="btn"
+              style={{
+                width: "100%",
+                padding: "12px 24px",
+                fontSize: "1.05rem",
+                fontWeight: 600,
+                borderRadius: "10px",
+              }}
+              onClick={onExit}
+            >
+              Continue
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
