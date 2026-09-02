@@ -689,6 +689,15 @@ async def websocket_endpoint(websocket: WebSocket, game_id: str, role: str, play
                 "player2_connected": room.player2_connected,
                 "spectator_count": room.spectator_count,
             })
+            # Terminate game if Player 1 or Player 2 leaves or disconnects
+            if departed_role in (Role.PLAYER_1, Role.PLAYER_2):
+                departed_name = room.player_names.get(departed_role, "Opponent")
+                await broadcast_to_room(room, {
+                    "type": "game_terminated",
+                    "reason": f"{departed_name} left or disconnected from the game.",
+                    "disconnected_role": departed_role.value,
+                })
+                mp_manager.remove_room(room.game_id)
 
 
 # ======================================================================
@@ -740,6 +749,14 @@ async def handle_mp_place_ship(room: Room, ws: WebSocket, player_index: int, msg
         "state": build_spectator_state(room),
     })
 
+    # Broadcast player ready state
+    await broadcast_to_room(room, {
+        "type": "player_ready",
+        "player_index": player_index,
+        "player1_ready": room.player1_ready,
+        "player2_ready": room.player2_ready,
+    })
+
     # If both ready, start the game
     if room.both_ready and room.game is not None:
         room.game_start_time = room.game_start_time or time.time()
@@ -748,6 +765,9 @@ async def handle_mp_place_ship(room: Room, ws: WebSocket, player_index: int, msg
             "current_player": room.game.current_player,
             "current_player_name": room.game.get_current_player().name,
         })
+        for p_idx, p_role in enumerate([Role.PLAYER_1, Role.PLAYER_2]):
+            st = build_player_state(room, p_idx)
+            await send_to_role(room, p_role, {"type": "state_update", "state": st})
 
 
 async def handle_mp_ready(room: Room, ws_role: Role, player_index: int):
@@ -772,6 +792,9 @@ async def handle_mp_ready(room: Room, ws_role: Role, player_index: int):
             "current_player": room.game.current_player,
             "current_player_name": room.game.get_current_player().name,
         })
+        for p_idx, p_role in enumerate([Role.PLAYER_1, Role.PLAYER_2]):
+            st = build_player_state(room, p_idx)
+            await send_to_role(room, p_role, {"type": "state_update", "state": st})
 
 
 async def handle_mp_attack(room: Room, sender_ws: WebSocket, ws_role: Role, player_index: int, msg: Dict[str, Any]):

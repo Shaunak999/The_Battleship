@@ -12,6 +12,7 @@ const PHASES = {
   WAITING_FOR_READY: "waiting_for_ready",
   BATTLE: "battle",
   RESULTS: "results",
+  TERMINATED: "terminated",
 };
 
 const ALL_SHIPS = [
@@ -32,6 +33,7 @@ export default function MultiplayerGame({ gameId, role, playerName, onExit }) {
   const [player2Ready, setPlayer2Ready] = useState(false);
   const [winner, setWinner] = useState(null);
   const [myShipsPlaced, setMyShipsPlaced] = useState(false);
+  const [terminationReason, setTerminationReason] = useState(null);
 
   const wsRef = useRef(null);
   const playerIndex = role === "player1" ? 0 : 1;
@@ -89,18 +91,36 @@ export default function MultiplayerGame({ gameId, role, playerName, onExit }) {
         }
         break;
 
+      case "game_terminated":
+        setTerminationReason(msg.reason || "A player left or disconnected.");
+        setPhase(PHASES.TERMINATED);
+        break;
+
       case "player_disconnected":
         if (msg.role === "player1" || msg.role === "player2") {
-          setLastMessage("Opponent disconnected.");
+          setTerminationReason("Opponent left or disconnected from the game.");
+          setPhase(PHASES.TERMINATED);
           setOpponentConnected(false);
         }
         break;
 
       case "state_update":
         setGameState(msg.state);
-        // When we first receive game state, transition to placement phase
-        if (msg.state && msg.state.status !== "over" && !myShipsPlaced) {
-          setPhase(PHASES.PLACEMENT);
+        if (msg.state) {
+          const p1Ready = msg.state.player1_ready ?? false;
+          const p2Ready = msg.state.player2_ready ?? false;
+          setPlayer1Ready(p1Ready);
+          setPlayer2Ready(p2Ready);
+
+          if (msg.state.status === "over") {
+            // Game ended — show results (don't let ready-state override)
+            setWinner(msg.state.winner);
+            setPhase(PHASES.RESULTS);
+          } else if (p1Ready && p2Ready) {
+            setPhase(PHASES.BATTLE);
+          } else if (!myShipsPlaced) {
+            setPhase(PHASES.PLACEMENT);
+          }
         }
         break;
 
@@ -116,11 +136,16 @@ export default function MultiplayerGame({ gameId, role, playerName, onExit }) {
       case "player_ready":
         setPlayer1Ready(msg.player1_ready);
         setPlayer2Ready(msg.player2_ready);
+        if (msg.player1_ready && msg.player2_ready) {
+          setPhase(PHASES.BATTLE);
+        }
         break;
 
       case "game_started":
         setPhase(PHASES.BATTLE);
-        setLastMessage(`Game started! ${msg.current_player_name}'s turn`);
+        if (msg.current_player_name) {
+          setLastMessage(`Game started! ${msg.current_player_name}'s turn`);
+        }
         break;
 
       case "attack_result": {
@@ -165,6 +190,22 @@ export default function MultiplayerGame({ gameId, role, playerName, onExit }) {
   }
 
   // ── RENDER ────────────────────────────────────────────────────────
+
+  if (phase === PHASES.TERMINATED) {
+    return (
+      <div className="app-shell">
+        <div className="card" style={{ textAlign: "center", maxWidth: 440, padding: 32 }}>
+          <h2 style={{ color: "#ef4444", marginBottom: 12 }}>Game Terminated</h2>
+          <p style={{ color: "var(--color-text-muted)", marginBottom: 24, fontSize: "0.95rem" }}>
+            {terminationReason || "A player left or disconnected from the game."}
+          </p>
+          <button className="btn" style={{ width: "100%" }} onClick={onExit}>
+            Back to Main Menu
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (phase === PHASES.CONNECTING) {
     return (
@@ -232,13 +273,20 @@ export default function MultiplayerGame({ gameId, role, playerName, onExit }) {
   }
 
   if (myShipsPlaced && phase !== PHASES.BATTLE && phase !== PHASES.RESULTS) {
+    // Auto-transition to battle if both are ready
+    if (player1Ready && player2Ready) {
+      setPhase(PHASES.BATTLE);
+    }
+
     // Waiting for opponent to finish placing ships
     return (
       <div className="app-shell">
         <div className="card" style={{ textAlign: "center", maxWidth: 440 }}>
           <h2>Ships Placed!</h2>
           <p style={{ color: "var(--color-text-muted)" }}>
-            Waiting for opponent to finish placing ships...
+            {player1Ready && player2Ready
+              ? "Starting battle..."
+              : "Waiting for opponent to finish placing ships..."}
           </p>
           <div style={{ marginTop: 12, fontSize: "0.85rem", color: "var(--color-text-muted)" }}>
             Player 1: {player1Ready ? "✓ Ready" : "Placing..."} | Player 2: {player2Ready ? "✓ Ready" : "Placing..."}
@@ -250,11 +298,13 @@ export default function MultiplayerGame({ gameId, role, playerName, onExit }) {
   }
 
   if (phase === PHASES.RESULTS) {
+    const didIWin = winner === gameState?.your_player?.name;
+
     return (
       <div className="app-shell">
-        <div className="card" style={{ textAlign: "center", maxWidth: 480 }}>
-          <h2>{winner ? `${winner} wins!` : "Game over"}</h2>
-        </div>
+        <h2 style={{ fontSize: "1.5rem", fontWeight: 700, textAlign: "center" }}>
+          {winner ? `${winner} Wins` : "Game Over"}
+        </h2>
 
         {gameState && (
           <div className="boards-row">
@@ -289,8 +339,8 @@ export default function MultiplayerGame({ gameId, role, playerName, onExit }) {
           </div>
         )}
 
-        <button className="btn" style={{ marginTop: 16 }} onClick={onExit}>
-          Back to Home
+        <button className="btn mp-continue-btn" onClick={onExit}>
+          Continue
         </button>
       </div>
     );
