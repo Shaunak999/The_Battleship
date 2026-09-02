@@ -67,8 +67,14 @@ class ProbabilityAI(BaseAI):
 
         heat = self._build_heatmap()
 
-        # Zero out cells we've already shot at
-        for r, c in self.shots_taken:
+        # In Hunt Mode (no active unsunk hits), add subtle random jitter so the AI
+        # does not deterministically attack the exact same center cell on move 1 every game.
+        if not self._unsunk_hits:
+            jitter = np.random.uniform(0.0, 0.75, size=heat.shape)
+            heat = heat + jitter
+
+        # Zero out cells we've already shot at or marked as sunk perimeters
+        for r, c in self.blocked_cells:
             heat[r, c] = 0
 
         # Find the cell with the maximum probability
@@ -76,7 +82,9 @@ class ProbabilityAI(BaseAI):
 
         if max_val == 0:
             # Shouldn't happen in a normal game — fallback
-            available = self._available_cells()
+            available = [c for c in self._available_cells() if c not in self.sunk_perimeter]
+            if not available:
+                available = self._available_cells()
 
             if not available:
                 raise RuntimeError("ProbabilityAI: no cells left")
@@ -131,12 +139,13 @@ class ProbabilityAI(BaseAI):
         # the AI finishes wounded ships first.
         if self._unsunk_hits:
             boost = np.zeros_like(heat)
+            blocked = self.blocked_cells
             for r, c in self._unsunk_hits:
                 for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                     nr, nc = r + dr, c + dc
                     if (
                         self._is_valid(nr, nc)
-                        and (nr, nc) not in self.shots_taken
+                        and (nr, nc) not in blocked
                     ):
                         boost[nr, nc] += 1
 
@@ -158,7 +167,7 @@ class ProbabilityAI(BaseAI):
         because that hit might belong to this very ship.
         """
         # Cells we know are blocked for new placements
-        blocked = self.misses | (self.hits - self._unsunk_hits)
+        blocked = self.misses | (self.hits - self._unsunk_hits) | self.sunk_perimeter
 
         # --- Horizontal placements ---
         for r in range(self.board_size):
@@ -169,7 +178,7 @@ class ProbabilityAI(BaseAI):
                     overlap = sum(1 for cell in cells if cell in self._unsunk_hits)
                     weight = 1 + overlap * 5  # amplify placements consistent with hits
                     for cell in cells:
-                        if cell not in self.shots_taken:
+                        if cell not in self.blocked_cells:
                             heat[cell[0], cell[1]] += weight
 
         # --- Vertical placements ---
@@ -180,7 +189,7 @@ class ProbabilityAI(BaseAI):
                     overlap = sum(1 for cell in cells if cell in self._unsunk_hits)
                     weight = 1 + overlap * 5
                     for cell in cells:
-                        if cell not in self.shots_taken:
+                        if cell not in self.blocked_cells:
                             heat[cell[0], cell[1]] += weight
 
     # ------------------------------------------------------------------
@@ -192,14 +201,10 @@ class ProbabilityAI(BaseAI):
     ) -> None:
         """When a ship is sunk, figure out which hit cells belonged to it
         and remove them from ``_unsunk_hits``.
-
-        We use a simple flood-fill on contiguous unsunk hits touching the
-        final sinking cell.  If *ship_size* is provided we stop once we
-        have exactly that many cells.
         """
         if ship_size is None:
-            # Without size info, just clear all unsunk hits (less precise)
-            self._unsunk_hits.clear()
+            self._unsunk_hits.discard((last_row, last_col))
+            self._mark_sunk_perimeter([(last_row, last_col)])
             return
 
         # BFS / flood-fill from (last_row, last_col) over unsunk hits
@@ -224,6 +229,7 @@ class ProbabilityAI(BaseAI):
 
         for cell in found:
             self._unsunk_hits.discard(cell)
+        self._mark_sunk_perimeter(found)
 
     # ------------------------------------------------------------------
     # Debugging / analysis helpers

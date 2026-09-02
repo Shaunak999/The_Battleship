@@ -66,8 +66,11 @@ class HuntTargetAI(BaseAI):
         ]
         random.shuffle(parity0)
         random.shuffle(parity1)
-        # parity0 is tried first; parity1 is the fallback
-        self._hunt_cells: list[tuple[int, int]] = parity1 + parity0  # pop from end → parity0 first
+        # Randomly choose which parity grid to try first for varied openings
+        if random.random() < 0.5:
+            self._hunt_cells: list[tuple[int, int]] = parity1 + parity0
+        else:
+            self._hunt_cells: list[tuple[int, int]] = parity0 + parity1
 
         # --- Target state ---
         self._target_queue: deque[tuple[int, int]] = deque()
@@ -85,10 +88,12 @@ class HuntTargetAI(BaseAI):
         - In TARGET mode: use the target queue.
         - In HUNT mode: use the checkerboard list.
         """
+        blocked = self.blocked_cells
+
         # --- Target mode ---
         while self._target_queue:
             cell = self._target_queue.popleft()
-            if cell not in self.shots_taken and self._is_valid(*cell):
+            if cell not in blocked and self._is_valid(*cell):
                 return cell
 
         # If the queue is empty but we were targeting, fall through to hunt
@@ -97,11 +102,13 @@ class HuntTargetAI(BaseAI):
         # --- Hunt mode ---
         while self._hunt_cells:
             cell = self._hunt_cells.pop()
-            if cell not in self.shots_taken:
+            if cell not in blocked:
                 return cell
 
-        # Fallback: shouldn't happen in a normal game, but be safe
-        available = self._available_cells()
+        # Fallback: filter available cells excluding blocked
+        available = [c for c in self._available_cells() if c not in self.sunk_perimeter]
+        if not available:
+            available = self._available_cells()
         if not available:
             raise RuntimeError("HuntTargetAI: no cells left to attack")
         return random.choice(available)
@@ -122,10 +129,6 @@ class HuntTargetAI(BaseAI):
         self._record_shot(row, col, result, sunk_ship_name, sunk_ship_size)
 
         if result == "miss":
-            # Miss during targeting: do nothing special.
-            # The target queue still has cells from the other direction
-            # (or other valid directions), so choose_move() will pop
-            # them naturally.
             return
 
         if result == "hit":
@@ -135,11 +138,53 @@ class HuntTargetAI(BaseAI):
             self._enqueue_neighbours(row, col)
 
         elif result == "sunk":
-            # Ship is sunk — clear ALL target state, return to hunt mode.
-            # No re-targeting around the sunk ship area.
-            self._current_hits.clear()
+            self._current_hits.append((row, col))
+            self._resolve_sunk(row, col, sunk_ship_size)
+
+    def _resolve_sunk(self, last_row: int, last_col: int, ship_size: Optional[int]) -> None:
+        """Remove hit cells for the sunk ship from _current_hits and mark its 1-cell perimeter as dead water."""
+        if not self._current_hits:
             self._target_queue.clear()
             self._orientation = None
+            self._is_targeting = False
+            return
+
+        size = ship_size if ship_size is not None else 1
+        # BFS / flood-fill from last_row, last_col along current_hits
+        hits_set = set(self._current_hits)
+        visited: set[tuple[int, int]] = set()
+        queue: deque[tuple[int, int]] = deque([(last_row, last_col)])
+        sunk_cells: list[tuple[int, int]] = []
+
+        while queue and len(sunk_cells) < size:
+            cell = queue.popleft()
+            if cell in visited:
+                continue
+            visited.add(cell)
+            if cell in hits_set:
+                sunk_cells.append(cell)
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = cell[0] + dr, cell[1] + dc
+                    if (nr, nc) in hits_set and (nr, nc) not in visited:
+                        queue.append((nr, nc))
+
+        # Remove sunk_cells from _current_hits and mark perimeter as dead water
+        for cell in sunk_cells:
+            if cell in self._current_hits:
+                self._current_hits.remove(cell)
+        self._mark_sunk_perimeter(sunk_cells)
+
+        # Reset targeting direction & queue
+        self._target_queue.clear()
+        self._orientation = None
+
+        if self._current_hits:
+            # Remaining hits exist on another ship — stay in TARGET mode!
+            self._is_targeting = True
+            self._update_orientation()
+            for r, c in self._current_hits:
+                self._enqueue_neighbours(r, c)
+        else:
             self._is_targeting = False
 
     # ------------------------------------------------------------------
@@ -157,11 +202,13 @@ class HuntTargetAI(BaseAI):
         elif self._orientation == "vertical":
             directions = [(-1, 0), (1, 0)]
         else:
-            directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            # Prefer horizontal probing first
+            directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
 
+        blocked = self.blocked_cells
         for dr, dc in directions:
             nr, nc = row + dr, col + dc
-            if self._is_valid(nr, nc) and (nr, nc) not in self.shots_taken:
+            if self._is_valid(nr, nc) and (nr, nc) not in blocked:
                 if (nr, nc) not in self._target_queue:
                     self._target_queue.append((nr, nc))
 

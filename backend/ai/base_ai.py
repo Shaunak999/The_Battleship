@@ -114,32 +114,87 @@ class BaseAI(ABC):
         self.shots_taken: set[tuple[int, int]] = set()
         self.hits: set[tuple[int, int]] = set()
         self.misses: set[tuple[int, int]] = set()
+        self.sunk_perimeter: set[tuple[int, int]] = set()
         self.remaining_ship_sizes: list[int] = [s for _, s in self.ships]
         self.sunk_ships: list[str] = []
+
+    def _mark_sunk_perimeter(self, sunk_cells: list[tuple[int, int]]) -> None:
+        """Mark surrounding 1-cell perimeter of a sunk ship as unusable dead water."""
+        for r, c in sunk_cells:
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < self.board_size and 0 <= nc < self.board_size:
+                        if (nr, nc) not in self.hits:
+                            self.sunk_perimeter.add((nr, nc))
+
+    @property
+    def blocked_cells(self) -> set[tuple[int, int]]:
+        """Cells that cannot contain ships (shots taken or sunk ship perimeters)."""
+        return self.shots_taken | self.sunk_perimeter
 
     # ------------------------------------------------------------------
     # Shared helper: random valid ship placement
     # ------------------------------------------------------------------
 
     def place_ships_randomly(self) -> list[dict]:
-        """Generate a complete random valid placement for the AI's own ships.
+        """Generate a smart, non-clustered placement for the AI's own ships.
 
-        Returns
-        -------
-        list[dict]
-            Each dict has keys:
-                ``"name"``  — ship name (str)
-                ``"size"``  — ship size (int)
-                ``"coordinates"`` — list of (row, col) tuples
+        Prefers placing ships with at least a 1-cell buffer spacing between them
+        so ships do not touch or form easy clusters for opponents to sweep.
         """
+        # Try up to 100 times to place all ships with a 1-cell buffer zone
+        for attempt in range(100):
+            occupied: set[tuple[int, int]] = set()
+            buffer_zone: set[tuple[int, int]] = set()
+            placements: list[dict] = []
+            success = True
+
+            for name, size in self.ships:
+                placed = False
+                for _ in range(200):
+                    orientation = random.choice(["horizontal", "vertical"])
+                    if orientation == "horizontal":
+                        row = random.randint(0, self.board_size - 1)
+                        col = random.randint(0, self.board_size - size)
+                        coords = [(row, col + i) for i in range(size)]
+                    else:
+                        row = random.randint(0, self.board_size - size)
+                        col = random.randint(0, self.board_size - 1)
+                        coords = [(row + i, col) for i in range(size)]
+
+                    # Check that no cell overlaps existing ships or their 1-cell surrounding buffer
+                    if not any(c in occupied or c in buffer_zone for c in coords):
+                        for c in coords:
+                            occupied.add(c)
+                            # Mark surrounding 1-cell neighborhood as buffer
+                            for dr in (-1, 0, 1):
+                                for dc in (-1, 0, 1):
+                                    nr, nc = c[0] + dr, c[1] + dc
+                                    if 0 <= nr < self.board_size and 0 <= nc < self.board_size:
+                                        buffer_zone.add((nr, nc))
+
+                        placements.append({
+                            "name": name,
+                            "size": size,
+                            "coordinates": coords,
+                        })
+                        placed = True
+                        break
+
+                if not placed:
+                    success = False
+                    break
+
+            if success:
+                return placements
+
+        # Fallback: standard non-overlapping placement if buffer constraint fails
         occupied: set[tuple[int, int]] = set()
         placements: list[dict] = []
-
         for name, size in self.ships:
             placed = False
-            attempts = 0
-            while not placed and attempts < 1000:
-                attempts += 1
+            while not placed:
                 orientation = random.choice(["horizontal", "vertical"])
                 if orientation == "horizontal":
                     row = random.randint(0, self.board_size - 1)
@@ -159,10 +214,6 @@ class BaseAI(ABC):
                         "coordinates": coords,
                     })
                     placed = True
-
-            if not placed:
-                # Extremely unlikely with a 10×10 board — restart entirely
-                return self.place_ships_randomly()
 
         return placements
 

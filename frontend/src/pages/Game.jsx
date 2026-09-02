@@ -286,8 +286,8 @@ export default function Game({ mode, onExit }) {
 
   const leftData = gameState.your_player;
   const rightData = gameState.opponent_player;
-  // Current viewer's hide state (persists per player independently).
-  const currentHidden = fleetHidden[viewerIndex];
+  // Current viewer's hide state (persists per player independently for HvH; always visible in HvAI).
+  const currentHidden = mode === "human_vs_human" ? fleetHidden[viewerIndex] : false;
   function toggleFleet() {
     setFleetHidden((prev) => {
       const next = [...prev];

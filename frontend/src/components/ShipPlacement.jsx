@@ -47,8 +47,32 @@ function isValidFootprint(cells, occupied) {
  *  used only to compute candidates for the "Randomize" button. The
  *  backend re-validates everything server-side regardless, so a bug
  *  here can only produce a rejected placement, never an invalid one. */
-function randomPlacementFor(size, occupied) {
-  for (let attempt = 0; attempt < 500; attempt++) {
+function isValidBufferedFootprint(cells, occupied, bufferZone) {
+  return cells.every(([r, c]) => inBounds(r, c) && !occupied.has(`${r}-${c}`) && !bufferZone.has(`${r}-${c}`));
+}
+
+/** Compute smart non-clustered candidates for the "Randomize" button. */
+function randomPlacementFor(size, occupied, bufferZone) {
+  // First attempt: place with 1-cell buffer spacing so ships don't touch
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const orientation = Math.random() < 0.5 ? "horizontal" : "vertical";
+    const row =
+      orientation === "horizontal"
+        ? Math.floor(Math.random() * BOARD_SIZE)
+        : Math.floor(Math.random() * (BOARD_SIZE - size + 1));
+    const col =
+      orientation === "horizontal"
+        ? Math.floor(Math.random() * (BOARD_SIZE - size + 1))
+        : Math.floor(Math.random() * BOARD_SIZE);
+
+    const cells = getShipCells(row, col, size, orientation);
+    if (isValidBufferedFootprint(cells, occupied, bufferZone)) {
+      return { row, col, orientation, cells };
+    }
+  }
+
+  // Fallback: standard non-overlapping placement if space is tight
+  for (let attempt = 0; attempt < 300; attempt++) {
     const orientation = Math.random() < 0.5 ? "horizontal" : "vertical";
     const row =
       orientation === "horizontal"
@@ -64,17 +88,10 @@ function randomPlacementFor(size, occupied) {
       return { row, col, orientation, cells };
     }
   }
-  return null; // extremely unlikely on a 10x10 board with <=5 ships
+
+  return null;
 }
 
-/**
- * board: the player's own 10x10 board array (to render placed ships as they go).
- * placedShipNames: ships already placed, derived from state.your_player.remaining_ships
- *   during setup — before the game starts no ship can be sunk, so this list is
- *   exactly "ships placed so far."
- * onPlace(shipName, row, col, orientation) -> Promise, expected to call the
- *   backend and refresh state; throwing surfaces the error message here.
- */
 export default function ShipPlacement({ board, placedShipNames, onPlace }) {
   const [orientation, setOrientation] = useState("horizontal");
   const [hoveredCell, setHoveredCell] = useState(null);
@@ -118,19 +135,37 @@ export default function ShipPlacement({ board, placedShipNames, onPlace }) {
     setBusy(true);
     try {
       const localOccupied = new Set(occupied);
+      const localBuffer = new Set();
+
+      // Populate buffer for existing placed ships
+      localOccupied.forEach((key) => {
+        const [r, c] = key.split("-").map(Number);
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            localBuffer.add(`${r + dr}-${c + dc}`);
+          }
+        }
+      });
+
       const placements = [];
       for (const ship of shipsToPlace) {
-        const placement = randomPlacementFor(ship.size, localOccupied);
+        const placement = randomPlacementFor(ship.size, localOccupied, localBuffer);
         if (!placement) {
           setError(`Couldn't find a random spot for ${ship.name}. Try again.`);
           setBusy(false);
           return;
         }
-        placement.cells.forEach(([r, c]) => localOccupied.add(`${r}-${c}`));
+        placement.cells.forEach(([r, c]) => {
+          localOccupied.add(`${r}-${c}`);
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              localBuffer.add(`${r + dr}-${c + dc}`);
+            }
+          }
+        });
         placements.push({ ship, placement });
       }
-      // Commit sequentially — each call is a real network request the
-      // parent must await and re-render from before the next one fires.
+      // Commit sequentially
       for (const { ship, placement } of placements) {
         await onPlace(ship.name, placement.row, placement.col, placement.orientation);
       }
