@@ -41,14 +41,42 @@ except ImportError:
 
 # ── Simulation helper ──────────────────────────────────────────────────────
 
+def _touches(
+    coords: List[Tuple[int, int]],
+    occupied: Dict[Tuple[int, int], str],
+    board_size: int,
+) -> bool:
+    """True if any coordinate is adjacent (incl. diagonally) to an occupied cell."""
+    for r, c in coords:
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < board_size and 0 <= nc < board_size and (nr, nc) in occupied:
+                    return True
+    return False
+
+
 def generate_random_board(
     board_size: int = BOARD_SIZE,
     ships=None,
+    touch_probability: float = 0.5,
 ) -> Tuple[Dict[Tuple[int, int], str], List[Dict]]:
-    """Place ships randomly. Returns (board_map, placements)."""
+    """Place ships randomly, mixing the two real-world placement styles.
+
+    Real opponents fall into two groups: AI defenders and the frontend's
+    "Randomize" button always keep a 1-cell gap between ships, while manual
+    human placement only forbids overlap — ships may touch. With
+    ``touch_probability`` (default 0.5) each generated board follows the
+    human style; the rest follow the gapped style.
+
+    Returns (board_map, placements).
+    """
     if ships is None:
         ships = SHIP_DEFINITIONS
 
+    allow_touch = np.random.random() < touch_probability
     occupied: Dict[Tuple[int, int], str] = {}
     placements = []
 
@@ -65,14 +93,16 @@ def generate_random_board(
                 c = np.random.randint(0, board_size)
                 coords = [(r + i, c) for i in range(size)]
 
-            if not any(co in occupied for co in coords):
+            if not any(co in occupied for co in coords) and (
+                allow_touch or not _touches(coords, occupied, board_size)
+            ):
                 for co in coords:
                     occupied[co] = name
                 placements.append({"name": name, "size": size, "coordinates": coords})
                 placed = True
                 break
         if not placed:
-            return generate_random_board(board_size, ships)
+            return generate_random_board(board_size, ships, touch_probability)
 
     return occupied, placements
 

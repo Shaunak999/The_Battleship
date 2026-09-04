@@ -257,3 +257,65 @@ class BaseAI(ABC):
     def name(self) -> str:
         """Human-readable strategy name (override in subclass if desired)."""
         return self.__class__.__name__
+
+
+def axis_extension_cells(
+    hits: set[tuple[int, int]],
+    shots_taken: set[tuple[int, int]],
+    board_size: int,
+) -> set[tuple[int, int]]:
+    """Cells just beyond straight runs of >=2 collinear un-sunk hits.
+
+    Once two adjacent hits reveal a ship's orientation (same row -> horizontal,
+    same column -> vertical), the only cells that can continue that ship are the
+    ones directly beyond the ends of the run along its axis — firing anywhere
+    else (e.g. perpendicular) wastes a turn. Returns those cells that are still
+    inside the board and have not been shot at yet. When no run has >=2 hits
+    (only isolated single hits), the orientation is unknown and the set is empty.
+    """
+    exts: set[tuple[int, int]] = set()
+
+    # Horizontal runs: group hit columns per row, split on gaps, and for every
+    # run of >=2 consecutive cells keep the cells beyond both ends.
+    by_row: dict[int, list[int]] = {}
+    for r, c in hits:
+        by_row.setdefault(r, []).append(c)
+    for r, cols in by_row.items():
+        cols = sorted(cols)
+        run = [cols[0]]
+        for c in cols[1:]:
+            if c == run[-1] + 1:
+                run.append(c)
+            else:
+                if len(run) >= 2:
+                    exts.add((r, run[0] - 1))
+                    exts.add((r, run[-1] + 1))
+                run = [c]
+        if len(run) >= 2:
+            exts.add((r, run[0] - 1))
+            exts.add((r, run[-1] + 1))
+
+    # Vertical runs: same logic per column.
+    by_col: dict[int, list[int]] = {}
+    for r, c in hits:
+        by_col.setdefault(c, []).append(r)
+    for c, rows in by_col.items():
+        rows = sorted(rows)
+        run = [rows[0]]
+        for r in rows[1:]:
+            if r == run[-1] + 1:
+                run.append(r)
+            else:
+                if len(run) >= 2:
+                    exts.add((run[0] - 1, c))
+                    exts.add((run[-1] + 1, c))
+                run = [r]
+        if len(run) >= 2:
+            exts.add((run[0] - 1, c))
+            exts.add((run[-1] + 1, c))
+
+    return {
+        (r, c)
+        for r, c in exts
+        if 0 <= r < board_size and 0 <= c < board_size and (r, c) not in shots_taken
+    }

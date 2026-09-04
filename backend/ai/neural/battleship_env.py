@@ -52,11 +52,37 @@ TOTAL_SHIP_CELLS = sum(s for _, s in SHIP_DEFINITIONS)  # 17
 
 # ── Helper: place ships randomly ───────────────────────────────────────────
 
+def _touches(
+    coords: List[Tuple[int, int]],
+    occupied: Dict[Tuple[int, int], Tuple[str, int]],
+    board_size: int,
+) -> bool:
+    """True if any coordinate is adjacent (incl. diagonally) to an occupied cell."""
+    for r, c in coords:
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < board_size and 0 <= nc < board_size and (nr, nc) in occupied:
+                    return True
+    return False
+
+
 def _place_ships_randomly(
     board_size: int = BOARD_SIZE,
     ships: List[Tuple[str, int]] = SHIP_DEFINITIONS,
+    touch_probability: float = 0.5,
 ) -> Dict[Tuple[int, int], Tuple[str, int]]:
-    """Return a mapping of (row, col) → (ship_name, ship_index)."""
+    """Return a mapping of (row, col) → (ship_name, ship_index).
+
+    Mixes the two real-world placement styles so training matches what an
+    agent actually faces: AI defenders / "Randomize" keep a 1-cell gap,
+    while manual human placement only forbids overlap (ships may touch).
+    With ``touch_probability`` (default 0.5) the fleet follows the human
+    style; otherwise the gapped style.
+    """
+    allow_touch = random.random() < touch_probability
     occupied: Dict[Tuple[int, int], Tuple[str, int]] = {}
     for idx, (name, size) in enumerate(ships):
         placed = False
@@ -70,13 +96,15 @@ def _place_ships_randomly(
                 r = random.randint(0, board_size - size)
                 c = random.randint(0, board_size - 1)
                 coords = [(r + i, c) for i in range(size)]
-            if not any(co in occupied for co in coords):
+            if not any(co in occupied for co in coords) and (
+                allow_touch or not _touches(coords, occupied, board_size)
+            ):
                 for co in coords:
                     occupied[co] = (name, idx)
                 placed = True
                 break
         if not placed:
-            return _place_ships_randomly(board_size, ships)
+            return _place_ships_randomly(board_size, ships, touch_probability)
     return occupied
 
 
@@ -87,10 +115,11 @@ class BattleshipEnv(gym.Env):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, board_size: int = BOARD_SIZE):
+    def __init__(self, board_size: int = BOARD_SIZE, touch_probability: float = 0.5):
         super().__init__()
         self.board_size = board_size
         self.n_cells = board_size * board_size
+        self._touch_probability = touch_probability
 
         # Observation: 6 channels × 10 × 10
         self.observation_space = spaces.Box(
@@ -124,7 +153,7 @@ class BattleshipEnv(gym.Env):
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         super().reset(seed=seed, options=options)
 
-        self._board = _place_ships_randomly(self.board_size)
+        self._board = _place_ships_randomly(self.board_size, touch_probability=self._touch_probability)
         self._shots = set()
         self._hits = set()
         self._misses = set()

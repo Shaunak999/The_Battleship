@@ -168,11 +168,13 @@ class HuntTargetAI(BaseAI):
                     if (nr, nc) in hits_set and (nr, nc) not in visited:
                         queue.append((nr, nc))
 
-        # Remove sunk_cells from _current_hits and mark perimeter as dead water
+        # Remove sunk_cells from _current_hits.
+        # The ring around the sunk ship is deliberately NOT marked as dead
+        # water: real opponents may place ships touching each other, so those
+        # cells can still hide another ship.
         for cell in sunk_cells:
             if cell in self._current_hits:
                 self._current_hits.remove(cell)
-        self._mark_sunk_perimeter(sunk_cells)
 
         # Reset targeting direction & queue
         self._target_queue.clear()

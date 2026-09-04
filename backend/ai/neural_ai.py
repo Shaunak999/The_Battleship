@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import os
+import random
 import zipfile
 from typing import Any, Dict, Optional, Tuple
 
@@ -28,7 +29,7 @@ from gymnasium import spaces
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.dqn.policies import QNetwork
 
-from .base_ai import BaseAI, BOARD_SIZE, SHIP_DEFINITIONS
+from .base_ai import BaseAI, BOARD_SIZE, SHIP_DEFINITIONS, axis_extension_cells
 
 
 # Default path relative to the backend/ directory
@@ -126,6 +127,7 @@ def load_dqn_qnetwork(model_path: str, board_size: int = BOARD_SIZE) -> Optional
         return _MODEL_CACHE[zip_path]
 
     if not os.path.exists(zip_path):
+        _MODEL_CACHE[zip_path] = None  # cache the miss so we don't re-check every move
         return None
 
     try:
@@ -169,6 +171,9 @@ def load_dqn_qnetwork(model_path: str, board_size: int = BOARD_SIZE) -> Optional
         _MODEL_CACHE[zip_path] = q_net
         return q_net
     except Exception:
+        # Cache the failure too — otherwise every choose_move() re-reads and
+        # re-parses the (possibly 25 MB+) zip just to fail again.
+        _MODEL_CACHE[zip_path] = None
         return None
 
 
@@ -183,10 +188,39 @@ class NeuralAgent(BaseAI):
         self,
         board_size: int = BOARD_SIZE,
         model_path: Optional[str] = None,
+        hunt_jitter: float = 60.0,
+        opening_band: float = 150.0,
+        phase_random: bool = True,
     ):
+        """NeuralAgent with a de-predicted model-less fallback.
+
+        When the trained model is unavailable (e.g. deployed without the
+        ~25 MB model zip) the AI falls back to a deterministic heatmap +
+        parity heuristic. The fallback is de-predicted so it does not always
+        open on the same cells:
+
+        - ``phase_random``  flips the checkerboard colour of the parity hint
+          per game (either colour finds a size-2 ship equally well),
+        - ``opening_band``  samples the opening shot from a band around the
+          top score instead of the exact peak,
+        - ``hunt_jitter``   adds small noise to hunt-mode near-ties.
+
+        These knobs only affect the fallback path; when a model loads, its
+        greedy predictions are used unchanged.
+        """
         self._model_path = model_path or _DEFAULT_MODEL_PATH
         self._q_net: Optional[nn.Module] = None
         self._unsunk_hits: set[Tuple[int, int]] = set()
+        # De-prediction knobs (fallback path only)
+        self._hunt_jitter = hunt_jitter
+        self._opening_band = opening_band
+        self._phase_random = phase_random
+        # Per-game checkerboard phase (0/1). Rolled lazily on the first move
+        # only once we know the model is unavailable, so a loaded model never
+        # sees a phase-shifted observation.
+        self._parity_shift = 0
+        self._fallback_active = False
+        self._first_move = True
         super().__init__(board_size)
 
     @property
@@ -196,12 +230,25 @@ class NeuralAgent(BaseAI):
     def reset(self) -> None:
         super().reset()
         self._unsunk_hits = set()
+        self._first_move = True
+        # When the model is known to be unavailable, roll a fresh parity phase
+        # per game so a reused instance still gets varied openings.
+        if self._q_net is None and self._fallback_active:
+            self._parity_shift = int(random.randint(0, 1))
         self._observation = self._build_obs()
 
     def choose_move(self) -> Tuple[int, int]:
         """Pick the best un-shot cell using masked model predictions or heatmap prior."""
         if self._q_net is None:
             self._q_net = load_dqn_qnetwork(self._model_path, self.board_size)
+            if self._q_net is None and not self._fallback_active:
+                # The model is unavailable, so from here on we run on the
+                # hybrid fallback. Engage de-prediction: roll a random parity
+                # phase for this game and rebuild the observation with it.
+                self._fallback_active = True
+                if self._phase_random:
+                    self._parity_shift = int(random.randint(0, 1))
+                self._observation = self._build_obs()
 
         # Build mask of valid (un-attacked) cells
         mask = np.ones(self.board_size * self.board_size, dtype=bool)
@@ -230,12 +277,39 @@ class NeuralAgent(BaseAI):
             action = int(np.argmax(q_values))
             return divmod(action, self.board_size)
 
-        # High-performance hybrid fallback: use heatmap + target mask directly
+        # High-performance hybrid fallback: heatmap + parity/target mask.
+        # De-predicted: hunt-mode near-ties get small jitter, and the opening
+        # samples from a band around the top score instead of the exact peak.
         scores = self._observation[4] * 100.0 + self._observation[5] * 500.0
-        scores_flat = scores.flatten()
-        scores_flat[~mask] = -np.inf
-        action = int(np.argmax(scores_flat))
-        return divmod(action, self.board_size)
+        if not self._unsunk_hits:
+            scores = scores + np.random.uniform(0.0, self._hunt_jitter, size=scores.shape)
+        sc = scores.flatten().copy()
+        sc[~mask] = -np.inf
+
+        # Orientation-aware targeting: when a straight run of >=2 collinear
+        # hits reveals the ship's axis, only the cells just beyond the run can
+        # continue it — never waste a shot probing perpendicular to a ship
+        # whose orientation is already known.
+        if self._unsunk_hits:
+            exts = axis_extension_cells(
+                self._unsunk_hits, self.shots_taken, self.board_size
+            )
+            if exts:
+                sc[:] = -np.inf
+                for r, c in exts:
+                    sc[r * self.board_size + c] = 1.0
+
+        if self._first_move and self._opening_band > 0:
+            self._first_move = False
+            mx = sc.max()
+            idxs = np.flatnonzero(sc >= mx - self._opening_band)
+            i = idxs[np.random.randint(len(idxs))]
+            return divmod(int(i), self.board_size)
+
+        mx = sc.max()
+        idxs = np.flatnonzero(sc == mx)
+        i = idxs[np.random.randint(len(idxs))]
+        return divmod(int(i), self.board_size)
 
     def process_result(
         self,
@@ -334,10 +408,14 @@ class NeuralAgent(BaseAI):
                     if 0 <= nr < board and 0 <= nc < board and (nr, nc) not in self.shots_taken:
                         obs[5, nr, nc] = 1.0
         else:
-            # Parity hunting pattern for smallest remaining ship
+            # Parity hunting pattern for the smallest remaining ship.
+            # In the de-predicted fallback the phase flips which checkerboard
+            # colour is swept: either colour finds a size-2 ship equally well,
+            # so flipping only changes which concrete cells get scanned.
+            phase = self._parity_shift if (self._fallback_active and self._phase_random) else 0
             for r in range(board):
                 for c in range(board):
-                    if (r + c) % min_size == 0 and (r, c) not in self.shots_taken:
+                    if (r + c + phase) % min_size == 0 and (r, c) not in self.shots_taken:
                         obs[5, r, c] = 1.0
 
         return obs

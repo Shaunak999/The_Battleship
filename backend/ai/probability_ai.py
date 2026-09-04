@@ -18,7 +18,7 @@ import random
 import numpy as np
 from typing import Optional
 
-from .base_ai import BaseAI
+from .base_ai import BaseAI, axis_extension_cells
 
 
 class ProbabilityAI(BaseAI):
@@ -43,10 +43,39 @@ class ProbabilityAI(BaseAI):
     probability values amplified, so the AI prioritises finishing off
     ships it has already wounded.
 
-    The AI fires at the highest-value cell.
+    The AI fires at the best cell, de-predicted so it does not replay the
+    same opening every game: hunt-mode shots add tiny random jitter, and the
+    very first shot is drawn from a band around the peak instead of always
+    picking the peak cell. Both knobs are configurable in the constructor and
+    tuned so variety costs nothing in average shots-to-win.
     """
 
-    def __init__(self, board_size: int = 10):
+    def __init__(
+        self,
+        board_size: int = 10,
+        hunt_jitter: float = 1.5,
+        opening_band: float = 2.0,
+    ):
+        """Probability-density AI.
+
+        Parameters
+        ----------
+        board_size : int
+            Side length of the square board.
+        hunt_jitter : float
+            Max random noise (0..hunt_jitter) added to every cell in hunt mode.
+            Large enough to let near-ties resolve differently each game, small
+            enough not to distort the real probability ordering.
+        opening_band : float
+            On the very first shot, pick randomly among cells whose value is
+            within *opening_band* of the peak instead of the peak itself. On
+            an empty board the top cells are near-equivalent, so this widens
+            the opening at no accuracy cost.
+        """
+        # Stored before super().__init__() because BaseAI's constructor calls
+        # reset(), which needs to know the knobs.
+        self._hunt_jitter = hunt_jitter
+        self._opening_band = opening_band
         super().__init__(board_size)
 
     @property
@@ -57,6 +86,7 @@ class ProbabilityAI(BaseAI):
         super().reset()
         # Track which hit cells have been accounted for by a sunk ship
         self._unsunk_hits: set[tuple[int, int]] = set()
+        self._first_move = True
 
     # ------------------------------------------------------------------
     # choose_move
@@ -67,17 +97,18 @@ class ProbabilityAI(BaseAI):
 
         heat = self._build_heatmap()
 
-        # In Hunt Mode (no active unsunk hits), add subtle random jitter so the AI
-        # does not deterministically attack the exact same center cell on move 1 every game.
+        # Hunt mode (no active unsunk hits): add a little random jitter so
+        # near-ties between cells resolve differently each game. The jitter is
+        # tiny relative to real heat-map differences, so it does not degrade
+        # shot quality — it only stops the AI replaying the same search.
         if not self._unsunk_hits:
-            jitter = np.random.uniform(0.0, 0.75, size=heat.shape)
-            heat = heat + jitter
+            heat = heat + np.random.uniform(0.0, self._hunt_jitter, size=heat.shape)
 
         # Zero out cells we've already shot at or marked as sunk perimeters
         for r, c in self.blocked_cells:
             heat[r, c] = 0
 
-        # Find the cell with the maximum probability
+        # Find the best remaining cell
         max_val = heat.max()
 
         if max_val == 0:
@@ -91,12 +122,31 @@ class ProbabilityAI(BaseAI):
 
             return random.choice(available)
 
-        # Convert NumPy int64 values to normal Python ints
+        if self._unsunk_hits:
+            # Target mode — a ship is wounded, so always finish it first:
+            # fire at the (boosted) peak neighbour, strict maximum.
+            candidates = [
+                (int(row), int(col))
+                for row, col in zip(*np.where(heat == max_val))
+            ]
+            return random.choice(candidates)
+
+        if self._first_move:
+            # Opening shot: pick randomly among every cell within *opening_band*
+            # of the peak instead of demanding the single maximum. On an empty
+            # board the centre cells are near-equivalent, so this widens the
+            # opening from a handful of cells to many — at no accuracy cost.
+            self._first_move = False
+            flat = heat.ravel()
+            band_idxs = np.flatnonzero(flat >= max_val - self._opening_band)
+            i = band_idxs[np.random.randint(len(band_idxs))]
+            return (int(i // self.board_size), int(i % self.board_size))
+
+        # Hunt mode, past the opening: strict maximum of the jittered map
         candidates = [
             (int(row), int(col))
             for row, col in zip(*np.where(heat == max_val))
         ]
-
         return random.choice(candidates)
 
     # ------------------------------------------------------------------
@@ -149,6 +199,18 @@ class ProbabilityAI(BaseAI):
                     ):
                         boost[nr, nc] += 1
 
+            # Orientation-aware boost: a straight run of >=2 collinear hits
+            # reveals the ship's axis, so the only cells that can continue it
+            # are the ones just beyond the run along that axis. Give them a
+            # bigger boost than every pure neighbour probe so the AI never
+            # wastes a shot perpendicular to a ship it is already lined up on.
+            # (Perpendicular probes are still used for isolated single hits,
+            # whose orientation is not yet known.)
+            for r, c in axis_extension_cells(
+                self._unsunk_hits, self.shots_taken, self.board_size
+            ):
+                boost[r, c] += 6
+
             # The boost factor is large enough to dominate the base probability
             # so that the AI always prioritises finishing ships.
             max_heat = heat.max() if heat.max() > 0 else 1
@@ -166,8 +228,10 @@ class ProbabilityAI(BaseAI):
         A placement IS still valid if it passes through an un-sunk hit,
         because that hit might belong to this very ship.
         """
-        # Cells we know are blocked for new placements
-        blocked = self.misses | (self.hits - self._unsunk_hits) | self.sunk_perimeter
+        # Cells we know are blocked for new placements. Sunk cells cannot hold
+        # a new ship, but the ring around a sunk ship can (ships may touch), so
+        # it is intentionally NOT treated as blocked.
+        blocked = self.misses | (self.hits - self._unsunk_hits)
 
         # --- Horizontal placements ---
         for r in range(self.board_size):
@@ -204,7 +268,6 @@ class ProbabilityAI(BaseAI):
         """
         if ship_size is None:
             self._unsunk_hits.discard((last_row, last_col))
-            self._mark_sunk_perimeter([(last_row, last_col)])
             return
 
         # BFS / flood-fill from (last_row, last_col) over unsunk hits
@@ -229,7 +292,11 @@ class ProbabilityAI(BaseAI):
 
         for cell in found:
             self._unsunk_hits.discard(cell)
-        self._mark_sunk_perimeter(found)
+        # Note: we deliberately do NOT mark the sunk ship's surrounding ring as
+        # guaranteed water. Real opponents (human players) are allowed to place
+        # ships touching each other, so a ring cell may still hide part of
+        # another ship. The probability heat-map already excludes the sunk
+        # ship's own cells, which is all that is safely known.
 
     # ------------------------------------------------------------------
     # Debugging / analysis helpers

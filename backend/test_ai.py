@@ -34,8 +34,26 @@ from ai.probability_ai import ProbabilityAI
 # Helper: simulate a full game for an AI against a random board
 # ======================================================================
 
-def generate_random_board(board_size=10, ships=None):
-    """Place all ships randomly on a board.
+def _touches(coords, occupied, board_size):
+    """True if any coordinate is adjacent (incl. diagonally) to an occupied cell."""
+    for r, c in coords:
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < board_size and 0 <= nc < board_size and (nr, nc) in occupied:
+                    return True
+    return False
+
+
+def generate_random_board(board_size=10, ships=None, touch_probability=0.5):
+    """Place all ships randomly, mixing the two real-world placement styles.
+
+    AI defenders / the frontend "Randomize" button keep a 1-cell gap between
+    ships, while manual human placement only forbids overlap (ships may
+    touch). With ``touch_probability`` (default 0.5) a board follows the
+    human style; otherwise the gapped style.
 
     Returns
     -------
@@ -47,6 +65,7 @@ def generate_random_board(board_size=10, ships=None):
     if ships is None:
         ships = SHIP_DEFINITIONS
 
+    allow_touch = random.random() < touch_probability
     occupied = {}
     placements = []
 
@@ -63,7 +82,9 @@ def generate_random_board(board_size=10, ships=None):
                 col = random.randint(0, board_size - 1)
                 coords = [(row + i, col) for i in range(size)]
 
-            if not any(c in occupied for c in coords):
+            if not any(c in occupied for c in coords) and (
+                allow_touch or not _touches(coords, occupied, board_size)
+            ):
                 for c in coords:
                     occupied[c] = name
                 placements.append({"name": name, "size": size, "coordinates": coords})
