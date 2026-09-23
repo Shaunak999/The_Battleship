@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import html
 import os
+from collections import Counter
 from datetime import datetime
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -53,29 +54,53 @@ def _per_ai_totals(
     return totals
 
 
-def _ai_shot_stats(ai_key: str, results: Dict[str, Dict], keys: Sequence[str]) -> Tuple[List[int], int, float, float]:
-    """Return (winning_shots_list, min_shots, median_shots, mean_shots)."""
-    winning_shots = []
-    all_shots = []
+def _winner_sequence(stats: Dict) -> List[Optional[str]]:
+    """Per-game winners from the a-side perspective ("a"/"b"/None).
+
+    Prefers the exact ``winner_seq`` produced by the tournament runner so
+    draws are never mistaken for wins. Falls back to the legacy
+    ``winners_a`` list (which cannot distinguish a loss from a draw).
+    """
+    seq = stats.get("winner_seq")
+    if seq is not None:
+        return list(seq)
+    legacy = stats.get("winners_a")
+    if legacy is None:
+        return [None] * len(stats.get("shots_a", []))
+    return ["a" if w == 1 else "b" for w in legacy]
+
+
+def _mode_shots(values: Sequence[int]) -> int:
+    """Most common shot count; ties resolve to the smaller (faster) value."""
+    counts = Counter(int(v) for v in values)
+    return min(counts, key=lambda v: (-counts[v], v))
+
+
+def _ai_shot_stats(
+    ai_key: str, results: Dict[str, Dict], keys: Sequence[str],
+) -> Tuple[List[int], int, int, float, int]:
+    """Return (winning_shots_list, min_shots, mode_shots, mean_shots, wins).
+
+    Stats are computed over *won* games only. A strategy that never wins has
+    no winning-shot distribution, so it reports zeros instead of silently
+    falling back to its losses.
+    """
+    winning_shots: List[int] = []
     for opp in keys:
         if opp == ai_key:
             continue
         s = results[ai_key][opp]
-        winners = s.get("winners_a", [])
-        shots = s.get("shots_a", [])
-        for w, sh in zip(winners, shots):
-            all_shots.append(sh)
-            if w == 1:
+        for w, sh in zip(_winner_sequence(s), s.get("shots_a", [])):
+            if w == "a":
                 winning_shots.append(sh)
-    
-    data = winning_shots if winning_shots else all_shots
-    if not data:
-        return [], 0, 0.0, 0.0
 
-    min_s = int(np.min(data))
-    med_s = float(np.median(data))
-    mean_s = float(np.mean(data))
-    return data, min_s, med_s, mean_s
+    if not winning_shots:
+        return [], 0, 0, 0.0, 0
+
+    min_s = int(np.min(winning_shots))
+    mode_s = _mode_shots(winning_shots)
+    mean_s = float(np.mean(winning_shots))
+    return winning_shots, min_s, mode_s, mean_s, len(winning_shots)
 
 
 
@@ -103,6 +128,15 @@ def _build_shot_efficiency_histogram(
         xbins=dict(start=15, end=100, size=4),
         hovertemplate=f"<b>{display_name}</b><br>Shot Range: %{{x}}<br>Victories: <b>%{{y}}</b><extra></extra>",
     ))
+
+    if not shot_data:
+        fig.add_annotation(
+            text="No wins recorded<br><span style='font-size:11px'>No winning shot distribution to plot</span>",
+            showarrow=False,
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            font=dict(size=13, color="#94A3B8"),
+            align="center",
+        )
 
     fig.update_layout(
         autosize=True,
@@ -237,6 +271,25 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
     background-color: #F1F5F9;
   }}
 
+  /* Grouped record tables */
+  tr.group-row td {{
+    background-color: #F1F5F9;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    padding: 9px 16px;
+  }}
+  tr.group-row:hover td {{
+    background-color: #F1F5F9;
+  }}
+  tr.subtotal-row td {{
+    background-color: var(--bg-alt);
+    font-weight: 700;
+  }}
+  .matchup-cell {{ padding-left: 32px; }}
+
   .rank-badge {{
     font-weight: 700;
     font-size: 12px;
@@ -293,12 +346,6 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
     color: var(--text-primary);
     margin-bottom: 2px;
   }}
-  .histogram-subhead {{
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-bottom: 12px;
-  }}
-
   /* Insight Pills */
   .insight-row {{
     display: flex;
@@ -327,14 +374,6 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
     font-weight: 700;
     color: var(--text-primary);
   }}
-  .insight-note {{
-    margin-top: 10px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    line-height: 1.4;
-    font-style: italic;
-  }}
-
   footer {{
     text-align: center;
     margin-top: 48px;
@@ -374,22 +413,23 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   </div>
 
   <div class="section-header">
-    <h2>Computer vs Computer Records</h2>
+    <h2>Computer vs Computer</h2>
   </div>
   <div class="table-wrapper">
     <table>
       <thead>
         <tr>
-          <th>Matchup</th>
-          <th>Agent A Wins</th>
-          <th>Agent B Wins</th>
+          <th>Strategy</th>
+          <th>Opponent</th>
+          <th>Games</th>
+          <th>Won</th>
+          <th>Lost</th>
           <th>Draws</th>
-          <th>Win Split</th>
           <th>Win Rate</th>
         </tr>
       </thead>
       <tbody>
-        {matchup_rows}
+        {per_ai_rows}
       </tbody>
     </table>
   </div>
@@ -442,69 +482,127 @@ def build_report_html(
         </tr>
         """
 
-    # 2. Matchup Table Rows (Green for larger portion, Red for smaller portion)
-    pairs = [(keys[i], keys[j]) for i in range(len(keys)) for j in range(i + 1, len(keys))]
+    # 2. Computer vs Computer — one numbered row per pair, in tournament
+    #    order: 1 Random vs Hunt&Target, 2 Random vs Probability, ...
+    key_list = list(keys)
     matchup_rows = ""
-    for a, b in pairs:
-        s = results[a][b]
-        aw, bw, d = s["a_wins"], s["b_wins"], s["draws"]
-        decided = aw + bw
-        pct_a = aw / max(decided, 1)
-        pct_b = bw / max(decided, 1)
+    pair_no = 0
+    for i in range(len(key_list)):
+        for j in range(i + 1, len(key_list)):
+            a, b = key_list[i], key_list[j]
+            pair_no += 1
+            s = results[a][b]
+            aw, bw, d = s["a_wins"], s["b_wins"], s["draws"]
+            decided = aw + bw
+            pct_a = aw / max(decided, 1)
+            pct_b = bw / max(decided, 1)
 
-        # Color green for larger portion (winner), red for smaller portion (loser)
-        if aw > bw:
-            color_a = _GREEN_WINNER
-            color_b = _RED_LOSER
-        elif bw > aw:
-            color_a = _RED_LOSER
-            color_b = _GREEN_WINNER
-        else:
-            color_a = _GREEN_WINNER
-            color_b = _GREEN_WINNER
+            # Color green for larger portion (winner), red for smaller portion (loser)
+            if aw > bw:
+                color_a = _GREEN_WINNER
+                color_b = _RED_LOSER
+            elif bw > aw:
+                color_a = _RED_LOSER
+                color_b = _GREEN_WINNER
+            else:
+                color_a = _GREEN_WINNER
+                color_b = _GREEN_WINNER
 
-        matchup_rows += f"""
-        <tr>
-          <td><strong>{html.escape(display_names[a])}</strong> <span style="color: #94A3B8;">vs</span> <strong>{html.escape(display_names[b])}</strong></td>
-          <td><strong style="color: {'#10B981' if aw >= bw else '#EF4444'};">{aw}</strong></td>
-          <td><strong style="color: {'#10B981' if bw >= aw else '#EF4444'};">{bw}</strong></td>
-          <td>{d}</td>
-          <td>
-            <div class="flex-align">
-              <div class="bar-container">
-                <div class="bar-fill-a" style="width: {pct_a*100:.1f}%; background: {color_a};"></div>
-                <div class="bar-fill-b" style="width: {pct_b*100:.1f}%; background: {color_b};"></div>
-              </div>
-              <span style="font-size: 11px; color: #64748B; font-weight: 600;">{pct_a:.0%} / {pct_b:.0%}</span>
-            </div>
-          </td>
-          <td><strong>{pct_a:.1%}</strong></td>
+            matchup_rows += f"""
+            <tr>
+              <td><span class="rank-badge">{pair_no}</span></td>
+              <td><strong>{html.escape(display_names[a])}</strong> <span style="color: #94A3B8;">vs</span> <strong>{html.escape(display_names[b])}</strong></td>
+              <td><strong style="color: {'#10B981' if aw >= bw else '#EF4444'};">{aw}</strong></td>
+              <td><strong style="color: {'#10B981' if bw >= aw else '#EF4444'};">{bw}</strong></td>
+              <td>{d}</td>
+              <td>
+                <div class="flex-align">
+                  <div class="bar-container">
+                    <div class="bar-fill-a" style="width: {pct_a*100:.1f}%; background: {color_a};"></div>
+                    <div class="bar-fill-b" style="width: {pct_b*100:.1f}%; background: {color_b};"></div>
+                  </div>
+                  <span style="font-size: 11px; color: #64748B; font-weight: 600;">{pct_a:.0%} / {pct_b:.0%}</span>
+                </div>
+              </td>
+              <td><strong>{pct_a:.1%}</strong></td>
+            </tr>
+            """
+
+    # 2b. Individual strategy records (mirrors the Excel "Per AI Detail" sheet).
+    per_ai_rows = ""
+    for a in keys:
+        per_ai_rows += f"""
+        <tr class="group-row">
+          <td colspan="7">{html.escape(display_names[a])}</td>
+        </tr>
+        """
+        total_w = total_l = total_d = 0
+        for b in keys:
+            if a == b:
+                continue
+            s = results[a][b]
+            w, l, d = s["a_wins"], s["b_wins"], s["draws"]
+            total_w += w
+            total_l += l
+            total_d += d
+            pct = w / max(w + l, 1)
+            per_ai_rows += f"""
+            <tr>
+              <td class="matchup-cell">{html.escape(display_names[a])}</td>
+              <td>vs {html.escape(display_names[b])}</td>
+              <td>{games_per_pair}</td>
+              <td><strong style="color: {'#10B981' if w >= l else '#EF4444'};">{w}</strong></td>
+              <td>{l}</td>
+              <td>{d}</td>
+              <td><strong>{pct:.1%}</strong></td>
+            </tr>
+            """
+
+        total_games = total_w + total_l + total_d
+        overall_pct = total_w / max(total_w + total_l, 1)
+        per_ai_rows += f"""
+        <tr class="subtotal-row">
+          <td class="matchup-cell">{html.escape(display_names[a])}</td>
+          <td>TOTAL</td>
+          <td>{total_games}</td>
+          <td>{total_w}</td>
+          <td>{total_l}</td>
+          <td>{total_d}</td>
+          <td>{overall_pct:.1%}</td>
         </tr>
         """
 
     # 3. 4 Shot Efficiency Histograms (Uniform Vivid Blue) + Metrics
     histogram_cards = ""
     for idx, k in enumerate(keys):
-        shot_data, min_shots, median_shots, mean_shots = _ai_shot_stats(k, results, keys)
+        shot_data, min_shots, mode_shots, mean_shots, wins = _ai_shot_stats(k, results, keys)
         hist_html = _build_shot_efficiency_histogram(k, shot_data, display_names[k])
+
+        if wins:
+            fastest_txt = f"{min_shots} shots"
+            mode_txt = f"{mode_shots} shots"
+            mean_txt = f"{mean_shots:.1f} shots"
+        else:
+            fastest_txt = mode_txt = "—"
+            mean_txt = "—"
+            
 
         histogram_cards += f"""
         <div class="histogram-card">
           <h3>{html.escape(display_names[k])} AI</h3>
-          <div class="histogram-subhead"></div>
           {hist_html}
           <div class="insight-row">
             <div class="insight-pill">
               <label>Fastest Win</label>
-              <span>{min_shots if min_shots > 0 else 'N/A'} shots</span>
+              <span>{fastest_txt}</span>
             </div>
             <div class="insight-pill">
-              <label>Median Shots</label>
-              <span>{median_shots:.1f} shots</span>
+              <label>Mode Shots</label>
+              <span>{mode_txt}</span>
             </div>
             <div class="insight-pill">
               <label>Average Shots</label>
-              <span>{mean_shots:.1f} shots</span>
+              <span>{mean_txt}</span>
             </div>
           </div>
         </div>
@@ -517,6 +615,7 @@ def build_report_html(
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M"),
         leaderboard_rows=leaderboard_rows,
         matchup_rows=matchup_rows,
+        per_ai_rows=per_ai_rows,
         histogram_cards=histogram_cards,
     )
 

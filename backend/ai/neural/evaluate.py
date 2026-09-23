@@ -16,6 +16,7 @@ import argparse
 import os
 import sys
 import time
+from collections import Counter
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -61,15 +62,17 @@ def _touches(
 def generate_random_board(
     board_size: int = BOARD_SIZE,
     ships=None,
-    touch_probability: float = 0.5,
+    touch_probability: float = 0.0,
 ) -> Tuple[Dict[Tuple[int, int], str], List[Dict]]:
-    """Place ships randomly, mixing the two real-world placement styles.
+    """Place ships randomly in one of the two real-world placement styles.
 
-    Real opponents fall into two groups: AI defenders and the frontend's
-    "Randomize" button always keep a 1-cell gap between ships, while manual
-    human placement only forbids overlap — ships may touch. With
-    ``touch_probability`` (default 0.5) each generated board follows the
-    human style; the rest follow the gapped style.
+    AI defenders and the frontend's "Randomize" button always keep a 1-cell
+    gap between ships; manual human placement only forbids overlap, so ships
+    may touch. ``touch_probability`` is the chance that a given board uses the
+    touching style. The default (0.0 = gapped) matches the training
+    environment in :mod:`ai.neural.train`, so a model is always scored on the
+    same distribution it was trained on. Pass 0.5 to mix both styles or 1.0
+    for full touching boards.
 
     Returns (board_map, placements).
     """
@@ -127,11 +130,19 @@ def play_one_game(
     total_hp = sum(len(v) for v in ship_hp.values())
     hits = 0
     shots = 0
+    fired_at: set = set()
 
     while hits < total_hp and shots < max_shots:
         row, col = attacker.choose_move()
         shots += 1
         cell = (row, col)
+
+        # A strategy that repeats a cell makes no progress. Never count the
+        # same cell twice, or `hits` can reach total_hp early and report a
+        # win that never happened.
+        if cell in fired_at:
+            continue
+        fired_at.add(cell)
 
         if cell in defender_board:
             ship_name = defender_board[cell]
@@ -157,6 +168,7 @@ def evaluate(
     num_games: int = 1000,
     label: str = "",
     max_shots: int = 100,
+    touch_probability: float = 0.0,
 ) -> Dict[str, float]:
     """Run *num_games* and return stats."""
     wins = 0
@@ -167,7 +179,7 @@ def evaluate(
         if (i + 1) % max(1, num_games // 10) == 0:
             print(f"\r    Progress: {i + 1}/{num_games}", end="", flush=True)
         
-        board, placements = generate_random_board()
+        board, placements = generate_random_board(touch_probability=touch_probability)
         won, shots = play_one_game(attacker, board, placements, max_shots)
         if won:
             wins += 1
@@ -179,12 +191,20 @@ def evaluate(
     win_rate = wins / num_games * 100
     avg_shots = total_shots / num_games
     avg_win_shots = np.mean(win_shots) if win_shots else float("nan")
+    min_shots = int(np.min(win_shots)) if win_shots else 0
+    med_shots = float(np.median(win_shots)) if win_shots else float("nan")
+    max_shots = int(np.max(win_shots)) if win_shots else 0
+    mode_shots = Counter(win_shots).most_common(1)[0][0] if win_shots else 0
 
     return {
         "label": label,
         "win_rate": win_rate,
         "avg_shots": avg_shots,
         "avg_win_shots": avg_win_shots,
+        "min_shots": min_shots,
+        "med_shots": med_shots,
+        "mode_shots": mode_shots,
+        "max_shots": max_shots,
         "wins": wins,
         "total": num_games,
     }
@@ -195,6 +215,9 @@ def main():
     parser.add_argument("--games", type=int, default=1000, help="Number of games")
     parser.add_argument("--model", type=str, default=None,
                         help="Path to trained model (without .zip)")
+    parser.add_argument("--touch-prob", type=float, default=0.0,
+                        help="Board placement style: 0.0 = gapped standard (default, matches training), "
+                             "0.5 = mixed, 1.0 = ships may touch")
     args = parser.parse_args()
 
     # Import here so the script works even if torch isn't installed yet
@@ -203,9 +226,9 @@ def main():
     except ImportError:
         from backend.ai.neural_ai import NeuralAgent
 
-    print("=" * 65)
+    print("=" * 80)
     print("  BATTLESHIP AI EVALUATION")
-    print("=" * 65)
+    print("=" * 80)
 
     # Build list of competitors
     competitors = [
@@ -220,35 +243,38 @@ def main():
         neural.reset()  # triggers model load
         competitors.append((neural, "Neural"))
     except FileNotFoundError as e:
-        print(f"\n  ⚠  Could not load NeuralAgent: {e}")
+        print(f"\n  \u26a0  Could not load NeuralAgent: {e}")
         print("     Training the model first: python -m ai.neural.train\n")
 
-    print(f"\n  Games per matchup: {args.games}")
+    touch_label = "Pure Gapped (Standard)" if args.touch_prob == 0.0 else ("Dense Touching" if args.touch_prob == 1.0 else "50/50 Mixed")
+    print(f"\n  Games per matchup : {args.games}")
+    print(f"  Board style       : {touch_label} (touch_prob={args.touch_prob})")
     print(f"  Max shots per game: 100\n")
 
     results = []
     for agent, label in competitors:
         print(f"  Evaluating {label}...", end=" ", flush=True)
         start = time.time()
-        stats = evaluate(agent, num_games=args.games, label=label)
+        stats = evaluate(agent, num_games=args.games, label=label, touch_probability=args.touch_prob)
         elapsed = time.time() - start
         print(f"done ({elapsed:.1f}s)")
         results.append(stats)
 
     # ── Print results table ────────────────────────────────────────────
-    print(f"\n{'=' * 65}")
-    print(f"  RESULTS ({args.games} games each)")
-    print(f"{'=' * 65}")
-    print(f"  {'Strategy':<20s}  {'Win%':>6s}  {'Avg Shots':>10s}  {'Avg Win Shots':>14s}")
-    print(f"  {'-'*20}  {'-'*6}  {'-'*10}  {'-'*14}")
+    print(f"\n{'=' * 80}")
+    print(f"  RESULTS ({args.games} games each, {touch_label})")
+    print(f"{'=' * 80}")
+    print(f"  {'Strategy':<16s}  {'Win%':>5s}  {'Best':>5s}  {'Mode':>6s}  {'Avg':>7s}  {'Worst':>6s}")
+    print(f"  {'-'*16}  {'-'*5}  {'-'*5}  {'-'*6}  {'-'*7}  {'-'*6}")
 
     for r in results:
         print(
-            f"  {r['label']:<20s}  {r['win_rate']:5.1f}%  "
-            f"{r['avg_shots']:10.1f}  {r['avg_win_shots']:14.1f}"
+            f"  {r['label']:<16s}  {r['win_rate']:4.0f}%  "
+            f"{r['min_shots']:5d}  {r['mode_shots']:6d}  "
+            f"{r['avg_shots']:7.1f}  {r['max_shots']:6d}"
         )
 
-    print(f"{'=' * 65}")
+    print(f"{'=' * 80}")
 
 
 if __name__ == "__main__":

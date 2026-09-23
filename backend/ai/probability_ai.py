@@ -185,8 +185,8 @@ class ProbabilityAI(BaseAI):
             self._add_ship_placements(heat, size)
 
         # --- Target-mode boost ---
-        # If there are un-sunk hits, heavily boost their neighbours so
-        # the AI finishes wounded ships first.
+        # If there are un-sunk hits, boost their neighbours so
+        # the AI finishes wounded ships.
         if self._unsunk_hits:
             boost = np.zeros_like(heat)
             blocked = self.blocked_cells
@@ -199,22 +199,13 @@ class ProbabilityAI(BaseAI):
                     ):
                         boost[nr, nc] += 1
 
-            # Orientation-aware boost: a straight run of >=2 collinear hits
-            # reveals the ship's axis, so the only cells that can continue it
-            # are the ones just beyond the run along that axis. Give them a
-            # bigger boost than every pure neighbour probe so the AI never
-            # wastes a shot perpendicular to a ship it is already lined up on.
-            # (Perpendicular probes are still used for isolated single hits,
-            # whose orientation is not yet known.)
             for r, c in axis_extension_cells(
                 self._unsunk_hits, self.shots_taken, self.board_size
             ):
-                boost[r, c] += 6
+                boost[r, c] += 4
 
-            # The boost factor is large enough to dominate the base probability
-            # so that the AI always prioritises finishing ships.
             max_heat = heat.max() if heat.max() > 0 else 1
-            heat += boost * max_heat * 10
+            heat += boost * max_heat * 8
 
         return heat
 
